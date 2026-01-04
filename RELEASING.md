@@ -20,6 +20,10 @@ python -m twine check dist/*
 
 The GitHub Actions workflow publishes to PyPI when a tag starting with `v` is pushed.
 
+### Optional: one-click release (GitHub Actions)
+- Use the `Release` workflow.
+- The workflow reads the version from `pyproject.toml`, checks the changelog, creates the tag, and publishes.
+
 ## After publishing
 - Verify install:
 
