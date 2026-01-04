@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "modmux"
+version = "0.1.0"
+description = "Single interface for several game mod platforms"
+readme = "README.md"
+requires-python = ">= 3.13"
+authors = [{ name = "APasz" }]
+license = { text = "MIT" }
+license-files = ["LICENSE"]
+
+dependencies = [
+    "pydantic>=2,<3",
+    "httpx>=0.28,<1",
+    "aiolimiter>=1.2,<2"
+]
+
+[project.scripts]
+modmux = "modmux.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/modmux"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/modmux", "README.md", "LICENSE", "pyproject.toml"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+
+[tool.pyright]
+typeCheckingMode = "standard"
+include = ["."]
