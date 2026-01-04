@@ -23,6 +23,7 @@ class ProviderClient(abc.ABC):
     name: Provider
     base: str
     creds_model: type[ProviderCreds] | None = None
+    domains: tuple[str, ...] = ()
 
     def __init__(
         self,
@@ -51,6 +52,44 @@ class ProviderClient(abc.ABC):
         """Close the underlying HTTP client if it is still open."""
         if self.http and not self.http.is_closed:
             await self.http.aclose()
+
+    @classmethod
+    def parse_url(cls, url: str) -> ModID | None:
+        """Parse a provider URL into a ModID.
+
+        Args;
+            url: Provider URL to parse.
+
+        Returns;
+            A ModID if the URL matches this provider; otherwise None.
+        """
+        return None
+
+    @classmethod
+    def _normalise_url(cls, url: str) -> str:
+        cleaned = url.strip()
+        if not cleaned:
+            return ""
+        if "://" not in cleaned:
+            return f"https://{cleaned}"
+        return cleaned
+
+    @classmethod
+    def _match_domain(cls, host: str | None) -> bool:
+        if not host:
+            return False
+        cleaned = host.lower()
+        if cleaned.startswith("www."):
+            cleaned = cleaned[4:]
+        for domain in cls.domains:
+            domain_clean = domain.lower()
+            if cleaned == domain_clean or cleaned.endswith(f".{domain_clean}"):
+                return True
+        return False
+
+    @staticmethod
+    def _path_segments(path: str) -> list[str]:
+        return [segment for segment in path.split("/") if segment]
 
     def _auth_headers(self) -> dict[str, str]:  # * override per provider as needed
         if not self.creds:

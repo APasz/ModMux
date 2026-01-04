@@ -11,6 +11,7 @@ from ._log import get_logger
 from .cache import ModioLookupCache
 from .models import Mod, ModID, Provider, ProviderCreds
 from .providers._base import ProviderClient
+from .utils.urls import parse_url
 from .utils.discovery import REGISTRY, load_providers
 
 log = get_logger()
@@ -96,6 +97,26 @@ class Muxer:
         if mod_id.provider != provider:
             raise ValueError(f"ModID.provider must match {provider}, got {mod_id.provider}")
         return await self._p(provider).get_mod(mod_id)
+
+    async def get_mod_from_url(self, url: str, *, game: str | None = None) -> Mod:
+        """Fetch a mod using a provider URL.
+
+        Args;
+            url: Provider URL to parse.
+            game: Optional override for the ModID game field.
+
+        Returns;
+            A normalised Mod instance.
+
+        Raises;
+            ValueError: If the URL does not match a supported provider.
+        """
+        mod_id = parse_url(url)
+        if mod_id is None:
+            raise ValueError(f"Unsupported mod URL: {url!r}")
+        if game is not None:
+            mod_id = ModID(provider=mod_id.provider, id=mod_id.id, game=game)
+        return await self.get_mod(mod_id.provider, mod_id)
 
     async def aclose(self) -> None:
         """Close the internal HTTP client if it is owned by the muxer."""

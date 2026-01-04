@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone
 from typing import cast
+from urllib.parse import urlsplit
 
 from httpx import AsyncClient
 from pydantic import AliasChoices, AnyHttpUrl, Field, SecretStr
@@ -82,9 +83,22 @@ class ModrinthClient(ProviderClient):
     name: Provider = Provider.MODRINTH
     base = "https://api.modrinth.com/v2"
     creds_model = ModrinthCreds
+    domains = ("modrinth.com",)
 
     def __init__(self, creds: ModrinthCreds | None, *, http: AsyncClient, cache: object | None = None) -> None:
         super().__init__(creds, http=http, cache=cache)
+
+    @classmethod
+    def parse_url(cls, url: str) -> ModID | None:
+        parts = urlsplit(cls._normalise_url(url))
+        if not cls._match_domain(parts.hostname):
+            return None
+        segments = cls._path_segments(parts.path)
+        if len(segments) < 2:
+            return None
+        if segments[0] not in {"mod", "project", "modpack", "resourcepack", "plugin", "shader", "datapack"}:
+            return None
+        return ModID(provider=Provider.MODRINTH, id=segments[1])
 
     async def _fetch_author(self, project_id: str, team_id: str | None) -> Author:
         try:

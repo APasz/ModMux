@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone
 from typing import cast
+from urllib.parse import urlsplit
 
 from httpx import AsyncClient
 from pydantic import AliasChoices, AnyHttpUrl, Field, SecretStr
@@ -82,9 +83,24 @@ class CurseforgeClient(ProviderClient):
     name: Provider = Provider.CURSEFORGE
     base = "https://api.curseforge.com/v1"
     creds_model = CurseforgeCreds
+    domains = ("curseforge.com",)
 
     def __init__(self, creds: CurseforgeCreds | None, *, http: AsyncClient, cache: object | None = None) -> None:
         super().__init__(creds, http=http, cache=cache)
+
+    @classmethod
+    def parse_url(cls, url: str) -> ModID | None:
+        parts = urlsplit(cls._normalise_url(url))
+        if not cls._match_domain(parts.hostname):
+            return None
+        segments = cls._path_segments(parts.path)
+        if len(segments) < 3:
+            return None
+        if segments[1] not in {"mc-mods", "mods", "addons", "modpacks", "texture-packs", "worlds", "customization"}:
+            return None
+        game = segments[0]
+        slug = segments[2]
+        return ModID(provider=Provider.CURSEFORGE, id=slug, game=game)
 
     async def get_mod(self, mod_id: ModID) -> Mod:
         """Fetch a single mod from CurseForge.

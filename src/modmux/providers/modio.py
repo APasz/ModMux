@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone
 from typing import cast
+from urllib.parse import urlsplit
 
 from httpx import AsyncClient
 from pydantic import AliasChoices, AnyHttpUrl, Field, SecretStr
@@ -96,11 +97,24 @@ class ModioClient(ProviderClient):
     name: Provider = Provider.MODIO
     base = "https://api.mod.io/v1"
     creds_model = ModioCreds
+    domains = ("mod.io",)
 
     def __init__(self, creds: ModioCreds | None, *, http: AsyncClient, cache: ModioLookupCache | None = None) -> None:
         super().__init__(creds, http=http, cache=cache)
         self.creds: ModioCreds | None = creds
         self.cache: ModioLookupCache | None = cache
+
+    @classmethod
+    def parse_url(cls, url: str) -> ModID | None:
+        parts = urlsplit(cls._normalise_url(url))
+        if not cls._match_domain(parts.hostname):
+            return None
+        segments = cls._path_segments(parts.path)
+        if len(segments) >= 4 and segments[0] == "g" and segments[2] in {"m", "mods"}:
+            return ModID(provider=Provider.MODIO, id=segments[3], game=segments[1])
+        if len(segments) >= 4 and segments[0] == "games" and segments[2] == "mods":
+            return ModID(provider=Provider.MODIO, id=segments[3], game=segments[1])
+        return None
 
     async def get_mod(self, mod_id: ModID) -> Mod:
         """Fetch a single mod from mod.io.

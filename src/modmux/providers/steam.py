@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone
 from typing import cast
+from urllib.parse import parse_qs, urlsplit
 
 from httpx import AsyncClient
 from pydantic import AliasChoices, AnyHttpUrl, Field, SecretStr
@@ -72,9 +73,32 @@ class SteamClient(ProviderClient):
     name: Provider = Provider.STEAM
     base = "https://api.steampowered.com"
     creds_model = SteamCreds
+    domains = ("steamcommunity.com",)
 
     def __init__(self, creds: SteamCreds | None, *, http: AsyncClient, cache: object | None = None) -> None:
         super().__init__(creds, http=http, cache=cache)
+
+    @classmethod
+    def parse_url(cls, url: str) -> ModID | None:
+        parts = urlsplit(cls._normalise_url(url))
+        if not cls._match_domain(parts.hostname):
+            return None
+        query = parse_qs(parts.query)
+        mod_id = ""
+        if "id" in query and query["id"]:
+            mod_id = query["id"][0]
+        if not mod_id:
+            segments = cls._path_segments(parts.path)
+            for index, segment in enumerate(segments):
+                if segment == "filedetails" and index + 1 < len(segments):
+                    mod_id = segments[index + 1]
+                    break
+        if not mod_id:
+            return None
+        game = None
+        if "appid" in query and query["appid"]:
+            game = query["appid"][0]
+        return ModID(provider=Provider.STEAM, id=mod_id, game=game)
 
     async def get_mod(self, mod_id: ModID) -> Mod:
         """Fetch a single mod from Steam Workshop.

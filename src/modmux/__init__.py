@@ -12,6 +12,7 @@ from .models import (
     Provider,
     ProviderCreds,
 )
+from .utils.urls import parse_url
 
 __all__ = [
     "Author",
@@ -25,4 +26,5 @@ __all__ = [
     "Provider",
     "ProviderCreds",
     "modmux_client",
+    "parse_url",
 ]

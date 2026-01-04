@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone
 from typing import cast
+from urllib.parse import urlsplit
 
 from httpx import AsyncClient
 from pydantic import AnyHttpUrl, Field, SecretStr
@@ -54,9 +55,29 @@ class NexusmodsClient(ProviderClient):
     name: Provider = Provider.NEXUSMODS
     base = "https://api.nexusmods.com/v1"
     creds_model = NexusCreds
+    domains = ("nexusmods.com",)
 
     def __init__(self, creds: NexusCreds | None, *, http: AsyncClient, cache: object | None = None) -> None:
         super().__init__(creds, http=http, cache=cache)
+
+    @classmethod
+    def parse_url(cls, url: str) -> ModID | None:
+        parts = urlsplit(cls._normalise_url(url))
+        if not cls._match_domain(parts.hostname):
+            return None
+        segments = cls._path_segments(parts.path)
+        game = None
+        host = parts.hostname.lower() if parts.hostname else ""
+        if host.endswith(".nexusmods.com"):
+            host = host[4:] if host.startswith("www.") else host
+            if host != "nexusmods.com":
+                game = host[: -len(".nexusmods.com")]
+        if len(segments) >= 3 and segments[1] == "mods":
+            game = game or segments[0]
+            return ModID(provider=Provider.NEXUSMODS, id=segments[2], game=game)
+        if len(segments) >= 2 and segments[0] == "mods" and game:
+            return ModID(provider=Provider.NEXUSMODS, id=segments[1], game=game)
+        return None
 
     async def get_mod(self, mod_id: ModID) -> Mod:
         """Fetch a single mod from Nexus Mods.
