@@ -1,9 +1,9 @@
 # ModMux
 
-[![PyPI](https://img.shields.io/pypi/v/modmux.svg)](https://pypi.org/project/modmux/)
-[![Python](https://img.shields.io/pypi/pyversions/modmux.svg)](https://pypi.org/project/modmux/)
-[![License](https://img.shields.io/github/license/APasz/ModMux.svg)](LICENSE)
-[![CI](https://github.com/APasz/ModMux/actions/workflows/ci.yml/badge.svg)](https://github.com/APasz/ModMux/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/modmux.svg?style=for-the-badge)](https://pypi.org/project/modmux/)
+[![Python](https://img.shields.io/badge/python-3.13%2B-blue.svg?style=for-the-badge)](https://pypi.org/project/modmux/)
+[![License](https://img.shields.io/github/license/APasz/ModMux.svg?style=for-the-badge)](LICENSE)
+[![CI](https://github.com/APasz/ModMux/actions/workflows/ci.yml/badge.svg?style=for-the-badge)](https://github.com/APasz/ModMux/actions/workflows/ci.yml)
 
 Unified async client for multiple game mod platforms. ModMux normalises provider responses into shared Pydantic models and ships a small CLI for quick lookups.
 
