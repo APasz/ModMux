@@ -6,7 +6,7 @@ import logging
 import os
 
 from ._log import get_logger
-from .client import modmux_client
+from .client import Muxer
 from .models import ModID, Provider, ProviderCreds
 
 log = get_logger("cli")
@@ -53,7 +53,7 @@ async def _run(argv: list[str] | None = None) -> int:
         {args.provider: creds_payload} if creds_payload else None
     )
     mod_id = ModID(provider=args.provider, id=args.mod_id, game=args.game)
-    async with modmux_client(creds=creds) as cli:
+    async with Muxer(creds=creds) as cli:
         mod = await cli.get_mod(args.provider, mod_id)
 
     print(mod.model_dump_json(indent=2 if args.pretty else None))

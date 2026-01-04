@@ -18,3 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 ### Security
+
+## 0.1.1
+
+### Added
+- Allow `Muxer` to be used as an async context manager for automatic cleanup.
+
+### Changed
+- Update library usage docs to show `async with Muxer(...)` as the preferred pattern.
+- Use `Muxer` directly in the CLI instead of `modmux_client`.
+- Expand Muxer docstrings with argument and lifecycle guidance.

@@ -54,21 +54,48 @@ Output is a JSON serialisation of the `Mod` model.
   - `MODMUX_<PROVIDER>_USER` (provider-specific user id, e.g. `MODMUX_MODIO_USER`)
 
 ## Library usage
+Two supported patterns are available: an async context manager or a manually
+closed client.
+
 ```python
 import asyncio
 
-from modmux import ModID, Provider, modmux_client
+from modmux import ModID, Muxer, Provider
+
+mod_id = ModID(provider=Provider.MODRINTH, id="fabric-api")
 
 
 async def run() -> None:
-    mod_id = ModID(provider=Provider.MODRINTH, id="fabric-api")
-    async with modmux_client(creds={Provider.MODRINTH: {"token": "token"}}) as mux:
+    async with Muxer(creds={Provider.MODRINTH: {"token": "token"}}) as mux:
         mod = await mux.get_mod(Provider.MODRINTH, mod_id)
     print(mod.name)
 
 
 asyncio.run(run())
 ```
+
+```python
+import asyncio
+
+from modmux import ModID, Muxer, Provider
+
+mod_id = ModID(provider=Provider.MODRINTH, id="fabric-api")
+
+
+async def run() -> None:
+    mux = Muxer()
+    try:
+        mod = await mux.get_mod(Provider.MODRINTH, mod_id)
+    finally:
+        await mux.aclose()
+    print(mod.name)
+
+
+asyncio.run(run())
+```
+
+The `modmux_client(...)` helper remains available as a convenience wrapper
+around `Muxer` for existing code.
 
 ## Provider notes
 - CurseForge: slug lookups require `ModID.game` (game id).

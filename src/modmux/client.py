@@ -2,6 +2,7 @@
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from types import TracebackType
 
 import httpx
 
@@ -16,7 +17,22 @@ log = get_logger()
 
 
 class Muxer:
-    """Coordinator for provider clients with shared HTTP and credentials."""
+    """Coordinator for provider clients with shared HTTP and credentials.
+
+    Args;
+        creds: Optional mapping of Provider to ProviderCreds, raw credential dicts,
+            or None. Raw dicts are validated against the provider's credential model.
+        cache: Optional per-provider cache objects. If omitted for Modio, a
+            ModioLookupCache is created automatically.
+        http: Optional shared httpx.AsyncClient. If None, the muxer creates one
+            and will close it on aclose().
+
+    Usage;
+        - Use as an async context manager for auto cleanup.
+        - Create directly and call aclose() when done.
+        - Or use modmux_client(...) as an async context manager for auto cleanup.
+        - Fetch with get_mod(Provider.MODRINTH, ModID(...)).
+    """
 
     def __init__(
         self,
@@ -86,6 +102,17 @@ class Muxer:
         if not self._external_http:
             await self._http.aclose()
 
+    async def __aenter__(self) -> "Muxer":
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        await self.aclose()
+
     def __str__(self) -> str:
         return f"<ModMuxer: {len(self.providers)} providers>"
 
@@ -97,6 +124,10 @@ async def modmux_client(
     http: httpx.AsyncClient | None = None,
 ) -> AsyncIterator[Muxer]:
     """Provide a managed ModMux client for async usage.
+
+    This is a convenience wrapper around Muxer that ensures the internal HTTP
+    client is closed when the context exits. Prefer using `async with Muxer(...)`
+    directly for new code.
 
     Args;
         creds: Optional credentials per provider.
