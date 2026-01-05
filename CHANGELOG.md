@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+## 0.1.3
+
+### Changed
+- Freeze identity-key models (`ProviderCreds`, `ModID`, `Author`, `ModSummary`) for stable hashing.
+
 ## 0.1.2
 
 ### Added

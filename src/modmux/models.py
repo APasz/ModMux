@@ -19,9 +19,9 @@ class Provider(StrEnum):
 
 
 class ProviderCreds(BaseModel):
-    """Base credential model for provider authentication."""
+    """Frozen credential model for provider authentication."""
 
-    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+    model_config = ConfigDict(populate_by_name=True, extra="ignore", frozen=True)
     provider: Provider
 
     def headers(self) -> dict[str, str]:
@@ -51,21 +51,50 @@ class ProviderCreds(BaseModel):
         """
         return base
 
+    def __hash__(self) -> int:
+        return hash((self.provider, self.headers(), self.params()))
+
 
 class ModID(BaseModel):
-    """Provider-scoped mod identifier."""
+    """Frozen provider-scoped mod identifier."""
+
+    model_config = ConfigDict(frozen=True)
 
     provider: Provider
     id: str
     game: str | None = None
 
+    def __hash__(self) -> int:
+        return hash((self.provider, self.id, self.game))
+
 
 class Author(BaseModel):
-    """Mod author metadata."""
+    """Frozen mod author metadata."""
+
+    model_config = ConfigDict(frozen=True)
 
     provider: Provider
     id: str
     name: str
+
+    def __hash__(self) -> int:
+        return hash((self.provider, self.id, self.name))
+
+
+class ModSummary(BaseModel):
+    """Frozen summary representation for a mod."""
+
+    model_config = ConfigDict(frozen=True)
+
+    provider: Provider
+    id: ModID
+    slug: str | None = None
+    name: str
+    author: Author
+    summary: str | None = None
+
+    def __hash__(self) -> int:
+        return hash((self.provider, self.id, self.slug, self.name, self.author, self.summary))
 
 
 class Dependency(BaseModel):
@@ -75,18 +104,6 @@ class Dependency(BaseModel):
     id: ModID
     version_req: str | None = None
     optional: bool = False
-
-
-class ModSummary(BaseModel):
-    """Summary representation for a mod."""
-
-    provider: Provider
-    id: ModID
-    slug: str | None = None
-    name: str
-    author: Author
-    summary: str | None = None
-
 
 class FileAsset(BaseModel):
     """File metadata for mod releases."""
