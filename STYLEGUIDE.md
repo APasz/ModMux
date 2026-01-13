@@ -198,7 +198,18 @@ def snap(point: Point, *, ignore_grid: bool = False) -> Point:
   * Use `inplace_*` naming or `inplace=True` keyword when it matters
 * Keep state grouped logically (client params vs provider caches vs model data)
 
-## “Don’ts” (the stuff that bloats diffs)
+### Single source of truth (SSOT)
+
+* Prefer a single canonical definition for each concept (defaults, IDs, schemas, limits, UI/state).
+* Everything else should be derived from that canonical source (computed properties, generated mappings, adapters).
+* Avoid “shadow” values (the same default/config/schema duplicated in multiple modules).
+* If duplication is unavoidable (interop with external APIs/UI), document why and add a test/assertion to prevent drift.
+Examples:
+- Define config defaults once (e.g. Settings/dataclass) and have CLI/env/UI read from it.
+- Define identifiers as enums/constants once; map to display strings in one place.
+- Keep domain rules (limits/units) in the domain layer; import them instead of retyping.
+
+## “Don’ts”
 
 * Don’t rename variables/classes just to match personal taste
 * Don’t reorder imports manually; run the tool
