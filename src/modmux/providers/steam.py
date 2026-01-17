@@ -71,6 +71,7 @@ class SteamClient(ProviderClient):
     """Client for Steam Workshop mod metadata."""
 
     name: Provider = Provider.STEAM
+    display_name: str = "Steam Workshop"
     base = "https://api.steampowered.com"
     creds_model = SteamCreds
     domains = ("steamcommunity.com",)

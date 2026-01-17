@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased
 
 ### Added
+- `Provider.display_name` attribute for a human friendly name for the portal
 
 ### Changed
 

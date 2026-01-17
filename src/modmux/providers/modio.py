@@ -95,6 +95,7 @@ class ModioClient(ProviderClient):
     """Client for mod.io mod metadata."""
 
     name: Provider = Provider.MODIO
+    display_name: str = "mod.io"
     base = "https://api.mod.io/v1"
     creds_model = ModioCreds
     domains = ("mod.io",)

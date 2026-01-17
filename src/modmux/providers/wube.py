@@ -81,6 +81,7 @@ class WubeClient(ProviderClient):
     """Client for Factorio mod portal metadata."""
 
     name: Provider = Provider.WUBE
+    display_name: str = "Factorio Mods"
     base = "https://mods.factorio.com/api"
     creds_model = WubeCreds
     domains = ("mods.factorio.com",)

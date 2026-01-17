@@ -17,7 +17,6 @@ class Provider(StrEnum):
     MODIO = "MODIO"
     STEAM = "STEAM"
 
-
 class ProviderCreds(BaseModel):
     """Frozen credential model for provider authentication."""
 

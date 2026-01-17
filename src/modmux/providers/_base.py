@@ -21,6 +21,7 @@ class ProviderClient(abc.ABC):
     """Base class for provider-specific API clients."""
 
     name: Provider
+    display_name: str
     base: str
     creds_model: type[ProviderCreds] | None = None
     domains: tuple[str, ...] = ()

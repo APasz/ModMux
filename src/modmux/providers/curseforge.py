@@ -81,6 +81,7 @@ class CurseforgeClient(ProviderClient):
     """Client for CurseForge mod metadata."""
 
     name: Provider = Provider.CURSEFORGE
+    display_name: str = "CurseForge"
     base = "https://api.curseforge.com/v1"
     creds_model = CurseforgeCreds
     domains = ("curseforge.com",)

@@ -53,6 +53,7 @@ class NexusmodsClient(ProviderClient):
     """Client for Nexus Mods mod metadata."""
 
     name: Provider = Provider.NEXUSMODS
+    display_name: str = "Nexus Mods"
     base = "https://api.nexusmods.com/v1"
     creds_model = NexusCreds
     domains = ("nexusmods.com",)

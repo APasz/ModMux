@@ -81,6 +81,7 @@ class ModrinthClient(ProviderClient):
     """Client for Modrinth mod metadata."""
 
     name: Provider = Provider.MODRINTH
+    display_name: str = "Modrinth"
     base = "https://api.modrinth.com/v2"
     creds_model = ModrinthCreds
     domains = ("modrinth.com",)
