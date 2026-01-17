@@ -5,7 +5,7 @@ Short checklist for cutting a release and publishing to PyPI.
 ## Before tagging
 - Update `CHANGELOG.md` (move entries from `Unreleased` into the new version).
 - Bump `version` in `pyproject.toml`.
-- Ensure CI is green (or run local checks if you prefer).
+- Ensure CI is green.
 - Optional local build check:
 
 ```bash

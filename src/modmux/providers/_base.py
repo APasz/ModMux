@@ -12,7 +12,7 @@ from httpx import RemoteProtocolError
 
 from .._errors import AuthError, NotFound, ProviderError, RateLimited
 from .._log import get_logger
-from ..models import Mod, ModID, Provider, ProviderCreds
+from ..models import LocaleTag, Mod, ModID, Provider, ProviderCreds
 
 log = get_logger("base")
 
@@ -38,11 +38,12 @@ class ProviderClient(abc.ABC):
         self.limiter = AsyncLimiter(5, 1)
         self.cache = cache
 
-    async def get_mod(self, mod_id: ModID) -> Mod:  # * override per provider
+    async def get_mod(self, mod_id: ModID, *, locales: list[LocaleTag] | None = None) -> Mod:  # * override per provider
         """Fetch a mod by provider-specific identifier.
 
         Args;
             mod_id: Provider-specific mod identifier.
+            locales: Optional locale tags to request translations for.
 
         Returns;
             A normalised Mod instance.

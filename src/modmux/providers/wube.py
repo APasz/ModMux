@@ -9,7 +9,7 @@ from pydantic import AliasChoices, AnyHttpUrl, Field, SecretStr
 
 from .._errors import ProviderError
 from .._log import get_logger
-from ..models import Author, Mod, ModID, Provider, ProviderCreds
+from ..models import Author, LocaleTag, LocalisedText, Mod, ModID, Provider, ProviderCreds
 from ..utils.discovery import register
 from ._base import ProviderClient
 
@@ -99,11 +99,12 @@ class WubeClient(ProviderClient):
             return ModID(provider=Provider.WUBE, id=segments[1])
         return None
 
-    async def get_mod(self, mod_id: ModID) -> Mod:
+    async def get_mod(self, mod_id: ModID, *, locales: list[LocaleTag] | None = None) -> Mod:
         """Fetch a single mod from the Factorio mod portal.
 
         Args;
             mod_id: Provider-specific mod identifier.
+            locales: Optional locale tags to request translations for.
 
         Returns;
             A normalised Mod instance.
@@ -164,8 +165,8 @@ class WubeClient(ProviderClient):
             provider=Provider.WUBE,
             id=mod_key,
             slug=str(slug) if slug is not None else None,
-            name=str(name),
-            description_md=description,
+            name=LocalisedText(value=str(name)),
+            description_md=LocalisedText(value=description) if description is not None else None,
             author=author,
             homepage=cast(AnyHttpUrl | None, homepage),
             tags=tags,

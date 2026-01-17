@@ -7,10 +7,10 @@ from urllib.parse import urlsplit
 from httpx import AsyncClient
 from pydantic import AliasChoices, AnyHttpUrl, Field, SecretStr
 
-from .._errors import NotFound, ProviderError
+from .._errors import ModMuxError, NotFound, ProviderError
 from .._log import get_logger
 from ..cache import ModioLookupCache
-from ..models import Author, Mod, ModID, Provider, ProviderCreds
+from ..models import Author, LocaleTag, LocalisedText, Mod, ModID, Provider, ProviderCreds
 from ..utils.discovery import register
 from ._base import ProviderClient
 
@@ -90,6 +90,26 @@ def _mod_cache_key(game_id: str, value: str) -> str:
     return f"{game_id}:{value}"
 
 
+def _normalise_locales(locales: list[LocaleTag] | None) -> list[str]:
+    if not locales:
+        return []
+    seen: set[str] = set()
+    cleaned: list[str] = []
+    for locale in locales:
+        tag = str(locale).strip()
+        if not tag or tag in seen:
+            continue
+        seen.add(tag)
+        cleaned.append(tag)
+    return cleaned
+
+
+def _localised_text(value: str | None, translations: dict[LocaleTag, str]) -> LocalisedText | None:
+    if value is None:
+        return None
+    return LocalisedText(value=value, translations=translations)
+
+
 @register
 class ModioClient(ProviderClient):
     """Client for mod.io mod metadata."""
@@ -117,11 +137,12 @@ class ModioClient(ProviderClient):
             return ModID(provider=Provider.MODIO, id=segments[3], game=segments[1])
         return None
 
-    async def get_mod(self, mod_id: ModID) -> Mod:
+    async def get_mod(self, mod_id: ModID, *, locales: list[LocaleTag] | None = None) -> Mod:
         """Fetch a single mod from mod.io.
 
         Args;
             mod_id: Provider-specific mod identifier.
+            locales: Optional locale tags to request translations for.
 
         Returns;
             A normalised Mod instance.
@@ -173,11 +194,9 @@ class ModioClient(ProviderClient):
         if isinstance(data, dict) and (data.get("error") or data.get("error_ref")):
             raise ProviderError(f"{self.name}: {data.get('error') or data.get('error_ref')}")
 
-        payload = data.get("data") if isinstance(data, dict) and "data" in data else data
-        if isinstance(payload, list):
-            if not payload:
-                raise NotFound(f"{self.name}: mod {mod_id.id!r} not found")
-            payload = payload[0]
+        payload = _extract_first_item(data)
+        if payload is None:
+            raise NotFound(f"{self.name}: mod {mod_id.id!r} not found")
         if not isinstance(payload, dict):
             raise ProviderError(f"{self.name}: unexpected response shape")
 
@@ -231,12 +250,39 @@ class ModioClient(ProviderClient):
                 await self.cache.mod_slug_to_id.set(_mod_cache_key(game_key, payload_slug), str(mod_key.id))
                 await self.cache.mod_id_to_slug.set(_mod_cache_key(game_key, str(mod_key.id)), payload_slug)
 
+        locale_tags = _normalise_locales(locales)
+        name_translations: dict[LocaleTag, str] = {}
+        description_translations: dict[LocaleTag, str] = {}
+        if locale_tags:
+            for locale in locale_tags:
+                try:
+                    translated = await self._get_json(
+                        f"games/{game_id}/mods/{mod_value}",
+                        headers={"Accept-Language": locale},
+                    )
+                except ModMuxError as exc:
+                    log.debug("mod.io localization fetch failed for %s: %s", locale, exc)
+                    continue
+                translated_payload = _extract_first_item(translated)
+                if not isinstance(translated_payload, dict):
+                    log.debug("mod.io localization payload not a dict for %s", locale)
+                    continue
+                translated_name = _coalesce(translated_payload.get("name"), translated_payload.get("mod_name"))
+                if translated_name is not None:
+                    name_translations[locale] = str(translated_name)
+                translated_description = _coalesce(
+                    translated_payload.get("description"),
+                    translated_payload.get("summary"),
+                )
+                if translated_description is not None:
+                    description_translations[locale] = str(translated_description)
+
         return Mod(
             provider=Provider.MODIO,
             id=mod_key,
             slug=str(slug) if slug is not None else None,
-            name=str(name),
-            description_md=description,
+            name=LocalisedText(value=str(name), translations=name_translations),
+            description_md=_localised_text(description, description_translations),
             author=author,
             homepage=cast(AnyHttpUrl | None, homepage),
             tags=tags,

@@ -10,7 +10,7 @@ from typing import cast
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from modmux import Muxer
-from modmux.models import Author, Mod, ModID, Provider, ProviderCreds
+from modmux.models import Author, LocaleTag, LocalisedText, Mod, ModID, Provider, ProviderCreds
 from modmux.providers._base import ProviderClient
 from modmux.providers.modrinth import ModrinthClient, ModrinthCreds
 
@@ -23,10 +23,10 @@ class StubProvider(ProviderClient):
         super().__init__(creds, http=http, cache=cache)
         self.last_mod_id: ModID | None = None
 
-    async def get_mod(self, mod_id: ModID) -> Mod:
+    async def get_mod(self, mod_id: ModID, *, locales: list[LocaleTag] | None = None) -> Mod:
         self.last_mod_id = mod_id
         author = Author(provider=Provider.MODRINTH, id="a1", name="Author")
-        return Mod(provider=Provider.MODRINTH, id=mod_id, name="Stub", author=author)
+        return Mod(provider=Provider.MODRINTH, id=mod_id, name=LocalisedText(value="Stub"), author=author)
 
 
 class TestMuxer(unittest.IsolatedAsyncioTestCase):

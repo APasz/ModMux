@@ -46,7 +46,7 @@ class TestModrinthClient(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(mod.id.id, project_id)
         self.assertEqual(mod.slug, "fabric-api")
-        self.assertEqual(mod.name, "Fabric API")
+        self.assertEqual(mod.name.value, "Fabric API")
         self.assertEqual(mod.author.id, "u1")
         self.assertEqual(mod.author.name, "AuthorOne")
         self.assertEqual(mod.tags, ["utility", "library"])

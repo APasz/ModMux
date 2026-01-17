@@ -9,7 +9,7 @@ from pydantic import AliasChoices, AnyHttpUrl, Field, SecretStr
 
 from .._errors import NotFound, ProviderError
 from .._log import get_logger
-from ..models import Author, Mod, ModID, Provider, ProviderCreds
+from ..models import Author, LocaleTag, LocalisedText, Mod, ModID, Provider, ProviderCreds
 from ..utils.discovery import register
 from ._base import ProviderClient
 
@@ -103,11 +103,12 @@ class CurseforgeClient(ProviderClient):
         slug = segments[2]
         return ModID(provider=Provider.CURSEFORGE, id=slug, game=game)
 
-    async def get_mod(self, mod_id: ModID) -> Mod:
+    async def get_mod(self, mod_id: ModID, *, locales: list[LocaleTag] | None = None) -> Mod:
         """Fetch a single mod from CurseForge.
 
         Args;
             mod_id: Provider-specific mod identifier.
+            locales: Optional locale tags to request translations for.
 
         Returns;
             A normalised Mod instance.
@@ -181,8 +182,8 @@ class CurseforgeClient(ProviderClient):
             provider=Provider.CURSEFORGE,
             id=mod_key,
             slug=str(slug) if slug is not None else None,
-            name=str(name),
-            description_md=description,
+            name=LocalisedText(value=str(name)),
+            description_md=LocalisedText(value=description) if description is not None else None,
             author=author,
             homepage=cast(AnyHttpUrl | None, homepage),
             tags=tags,

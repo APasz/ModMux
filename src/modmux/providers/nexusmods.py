@@ -8,7 +8,7 @@ from httpx import AsyncClient
 from pydantic import AnyHttpUrl, Field, SecretStr
 
 from .._log import get_logger
-from ..models import Author, Mod, ModID, Provider, ProviderCreds
+from ..models import Author, LocaleTag, LocalisedText, Mod, ModID, Provider, ProviderCreds
 from ..utils.discovery import register
 from ._base import ProviderClient
 
@@ -80,11 +80,12 @@ class NexusmodsClient(ProviderClient):
             return ModID(provider=Provider.NEXUSMODS, id=segments[1], game=game)
         return None
 
-    async def get_mod(self, mod_id: ModID) -> Mod:
+    async def get_mod(self, mod_id: ModID, *, locales: list[LocaleTag] | None = None) -> Mod:
         """Fetch a single mod from Nexus Mods.
 
         Args;
             mod_id: Provider-specific mod identifier.
+            locales: Optional locale tags to request translations for.
 
         Returns;
             A normalised Mod instance.
@@ -145,8 +146,8 @@ class NexusmodsClient(ProviderClient):
             provider=Provider.NEXUSMODS,
             id=mod_key,
             slug=str(slug) if slug is not None else None,
-            name=str(_coalesce(data.get("name"), data.get("mod_name"), mod_id.id)),
-            description_md=description,
+            name=LocalisedText(value=str(_coalesce(data.get("name"), data.get("mod_name"), mod_id.id))),
+            description_md=LocalisedText(value=description) if description is not None else None,
             author=author,
             homepage=cast(AnyHttpUrl | None, homepage),
             tags=tags,

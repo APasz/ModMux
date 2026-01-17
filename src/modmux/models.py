@@ -2,9 +2,9 @@
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Annotated, Any
 
-from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 
 class Provider(StrEnum):
@@ -16,6 +16,42 @@ class Provider(StrEnum):
     WUBE = "WUBE"
     MODIO = "MODIO"
     STEAM = "STEAM"
+
+
+LocaleTag = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=2,
+        max_length=50,
+        pattern=r"^[A-Za-z0-9]+([_-][A-Za-z0-9]+)*$",
+    ),
+]
+
+
+class LocalisedText(BaseModel):
+    """Text with optional translations keyed by locale tags."""
+
+    model_config = ConfigDict(frozen=True)
+
+    value: str
+    translations: dict[LocaleTag, str] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce(cls, value: object) -> object:
+        if isinstance(value, str):
+            return {"value": value}
+        if isinstance(value, LocalisedText):
+            return value
+        return value
+
+    def __str__(self) -> str:
+        return self.value
+
+    def __hash__(self) -> int:
+        return hash((self.value, tuple(sorted(self.translations.items()))))
+
 
 class ProviderCreds(BaseModel):
     """Frozen credential model for provider authentication."""
@@ -88,9 +124,9 @@ class ModSummary(BaseModel):
     provider: Provider
     id: ModID
     slug: str | None = None
-    name: str
+    name: LocalisedText
     author: Author
-    summary: str | None = None
+    summary: LocalisedText | None = None
 
     def __hash__(self) -> int:
         return hash((self.provider, self.id, self.slug, self.name, self.author, self.summary))
@@ -133,8 +169,8 @@ class Mod(BaseModel):
     provider: Provider
     id: ModID
     slug: str | None = None
-    name: str
-    description_md: str | None = None
+    name: LocalisedText
+    description_md: LocalisedText | None = None
     author: Author
     homepage: AnyHttpUrl | None = None
     tags: list[str] = Field(default_factory=list)

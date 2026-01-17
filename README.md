@@ -18,7 +18,7 @@ Unified async client for multiple game mod platforms. ModMux normalises provider
 - Modrinth
 - CurseForge
 - Nexus Mods
-- mod.io
+- Mod.io
 - Steam Workshop
 - Factorio Mod Portal (Wube)
 
