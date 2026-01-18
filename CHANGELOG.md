@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+## 0.2.2
+
+### Added
+- Re-export provider credential models from `modmux` for cleaner imports.
+- Allow `Muxer` and `modmux_client` to accept a sequence of `ProviderCreds`.
+
 ## 0.2.1
 
 ### Changed

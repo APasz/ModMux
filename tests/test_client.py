@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 import unittest
+from pathlib import Path
+from typing import cast
 
 import httpx
-from typing import cast
+from pydantic import SecretStr
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -13,6 +14,7 @@ from modmux import Muxer
 from modmux.models import Author, LocaleTag, LocalisedText, Mod, ModID, Provider, ProviderCreds
 from modmux.providers._base import ProviderClient
 from modmux.providers.modrinth import ModrinthClient, ModrinthCreds
+from modmux.providers.steam import SteamCreds
 
 
 class StubProvider(ProviderClient):
@@ -63,6 +65,31 @@ class TestMuxer(unittest.IsolatedAsyncioTestCase):
             self.assertIsInstance(creds, ModrinthCreds)
             assert creds is not None
             self.assertEqual(creds.headers(), {"Authorization": "secret"})
+
+    async def test_creds_sequence(self) -> None:
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, request=request))
+        ) as http:
+            creds_list = [ModrinthCreds(api_key=SecretStr("secret")), SteamCreds(api_key=SecretStr("key"))]
+            muxer = Muxer(creds=creds_list, http=http)
+            self.assertIs(muxer.tokens[Provider.MODRINTH], creds_list[0])
+            self.assertIs(muxer.tokens[Provider.STEAM], creds_list[1])
+
+    async def test_creds_sequence_duplicate_provider(self) -> None:
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, request=request))
+        ) as http:
+            creds_list = [ModrinthCreds(api_key=SecretStr("secret")), ModrinthCreds(api_key=SecretStr("other"))]
+            with self.assertRaises(ValueError):
+                Muxer(creds=creds_list, http=http)
+
+    async def test_creds_sequence_invalid_item(self) -> None:
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, request=request))
+        ) as http:
+            creds_list = [ModrinthCreds(api_key=SecretStr("secret")), cast(ProviderCreds, object())]
+            with self.assertRaises(TypeError):
+                Muxer(creds=creds_list, http=http)
 
     async def test_coerce_creds_mismatch(self) -> None:
         async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, request=request))) as http:

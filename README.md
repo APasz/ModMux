@@ -46,18 +46,32 @@ closed client.
 ```python
 import asyncio
 
-from modmux import ModID, Muxer, Provider
+from modmux import ModID, ModrinthCreds, Muxer, Provider
 
 mod_id = ModID(provider=Provider.MODRINTH, id="fabric-api")
 
 
 async def run() -> None:
-    async with Muxer(creds={Provider.MODRINTH: {"token": "token"}}) as mux:
+    async with Muxer(creds=[ModrinthCreds(api_key="api-key")]) as mux:
         mod = await mux.get_mod(Provider.MODRINTH, mod_id)
     print(mod.name)
 
 
 asyncio.run(run())
+```
+
+Use the same context manager pattern as above; you can supply multiple provider credentials in one go:
+
+```python
+from modmux import ModioCreds, Muxer, NexusCreds, SteamCreds
+
+mux = Muxer(
+    creds=[
+        ModioCreds(api_key="api-key", user_id="user-id"),
+        NexusCreds(token="nexus-token"),
+        SteamCreds(api_key="steam-key"),
+    ]
+)
 ```
 
 ```python
@@ -82,6 +96,18 @@ asyncio.run(run())
 
 The `modmux_client(...)` helper remains available as a convenience wrapper
 around `Muxer` for existing code.
+
+You can also pass raw credential dicts when you do not want to import the
+credential models directly:
+
+```python
+from modmux import ModID, Muxer, Provider
+
+mod_id = ModID(provider=Provider.MODRINTH, id="fabric-api")
+
+async with Muxer(creds={Provider.MODRINTH: {"token": "token"}}) as mux:
+    mod = await mux.get_mod(Provider.MODRINTH, mod_id)
+```
 
 ## URL parsing
 Parse provider URLs into `ModID` instances, or fetch directly from a URL.

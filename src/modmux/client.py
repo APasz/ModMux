@@ -1,6 +1,6 @@
 """Shared ModMux client utilities."""
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from types import TracebackType
 
@@ -22,7 +22,8 @@ class Muxer:
 
     Args;
         creds: Optional mapping of Provider to ProviderCreds, raw credential dicts,
-            or None. Raw dicts are validated against the provider's credential model.
+            or a sequence of ProviderCreds instances. Raw dicts are validated
+            against the provider's credential model.
         cache: Optional per-provider cache objects. If omitted for Modio, a
             ModioLookupCache is created automatically.
         http: Optional shared httpx.AsyncClient. If None, the muxer creates one
@@ -38,13 +39,13 @@ class Muxer:
     def __init__(
         self,
         *,
-        creds: dict[Provider, ProviderCreds | dict | None] | None = None,
+        creds: dict[Provider, ProviderCreds | dict | None] | Sequence[ProviderCreds] | None = None,
         cache: dict[Provider, object | None] | None = None,
         http: httpx.AsyncClient | None = None,
     ) -> None:
         self._external_http = http
         self._http = http or httpx.AsyncClient(timeout=30)
-        self.tokens = creds or {}
+        self.tokens = self._normalise_creds(creds)
         self._cache = cache or {}
 
         load_providers(providers)
@@ -59,6 +60,29 @@ class Muxer:
                 cache = ModioLookupCache()
             providers[provider] = cls(creds, http=self._http, cache=cache)
         return providers
+
+    def _normalise_creds(
+        self,
+        creds: dict[Provider, ProviderCreds | dict | None] | Sequence[ProviderCreds] | None,
+    ) -> dict[Provider, ProviderCreds | dict | None]:
+        if creds is None:
+            return {}
+        if isinstance(creds, dict):
+            return creds
+        if isinstance(creds, Sequence):
+            tokens: dict[Provider, ProviderCreds | dict | None] = {}
+            for item in creds:
+                if not isinstance(item, ProviderCreds):
+                    raise TypeError(
+                        "Credential sequences must contain ProviderCreds instances, "
+                        f"got {type(item)!r}"
+                    )
+                provider = item.provider
+                if provider in tokens:
+                    raise ValueError(f"Duplicate credentials for provider: {provider}")
+                tokens[provider] = item
+            return tokens
+        raise TypeError(f"Unsupported creds type: {type(creds)!r}")
 
     def _coerce_creds(self, provider: Provider, cls: type[ProviderClient]) -> ProviderCreds | None:
         raw = self.tokens.get(provider)
@@ -148,7 +172,7 @@ class Muxer:
 
 @asynccontextmanager
 async def modmux_client(
-    creds: dict[Provider, ProviderCreds | dict | None] | None = None,
+    creds: dict[Provider, ProviderCreds | dict | None] | Sequence[ProviderCreds] | None = None,
     cache: dict[Provider, object | None] | None = None,
     http: httpx.AsyncClient | None = None,
 ) -> AsyncIterator[Muxer]:
@@ -159,7 +183,7 @@ async def modmux_client(
     directly for new code.
 
     Args;
-        creds: Optional credentials per provider.
+        creds: Optional credentials per provider or a sequence of ProviderCreds instances.
         cache: Optional per-provider caches.
         http: Optional externally managed HTTP client.
 
