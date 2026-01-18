@@ -7,7 +7,7 @@ from urllib.parse import urlsplit
 from httpx import AsyncClient
 from pydantic import AliasChoices, AnyHttpUrl, Field, SecretStr
 
-from .._errors import ModMuxError, NotFound, ProviderError
+from ..modmux_errors import ModMuxError, NotFound, ProviderError
 from .._log import get_logger
 from ..cache import ModioLookupCache
 from ..models import Author, LocaleTag, LocalisedText, Mod, ModID, Provider, ProviderCreds

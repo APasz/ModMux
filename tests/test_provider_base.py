@@ -8,7 +8,7 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from modmux._errors import AuthError, NotFound, ProviderError, RateLimited
+from modmux.modmux_errors import AuthError, NotFound, ProviderError, RateLimited
 from modmux.models import Provider, ProviderCreds
 from modmux.providers._base import ProviderClient
 

@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+## 0.2.1
+
+### Changed
+- `_errors.py` renamed to `modmux_errors.py`
+
 ## 0.2.0
 
 ### Added

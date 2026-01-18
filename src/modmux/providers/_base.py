@@ -10,7 +10,7 @@ import httpx
 from aiolimiter import AsyncLimiter
 from httpx import RemoteProtocolError
 
-from .._errors import AuthError, NotFound, ProviderError, RateLimited
+from ..modmux_errors import AuthError, NotFound, ProviderError, RateLimited
 from .._log import get_logger
 from ..models import LocaleTag, Mod, ModID, Provider, ProviderCreds
 
