@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+## 0.2.3
+
+### Added
+- Add provider brand colour metadata via `ProviderClient.colour` for all built-in providers.
+- Add `Colour` and `ColourValue` types with hex validation and conversion helpers (`as_hex`, `as_rgb`, `as_rgb_css`, `as_int`).
+- Re-export `Colour` and `ColourValue` from `modmux`.
+- Add test coverage for colour validation/conversion and provider colour registration.
+
 ## 0.2.2
 
 ### Added

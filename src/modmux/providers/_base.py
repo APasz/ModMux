@@ -13,6 +13,7 @@ from httpx import RemoteProtocolError
 from ..modmux_errors import AuthError, NotFound, ProviderError, RateLimited
 from .._log import get_logger
 from ..models import LocaleTag, Mod, ModID, Provider, ProviderCreds
+from .colour import Colour
 
 log = get_logger("base")
 
@@ -23,6 +24,7 @@ class ProviderClient(abc.ABC):
     name: Provider
     display_name: str
     base: str
+    colour: Colour = Colour("#808080")
     creds_model: type[ProviderCreds] | None = None
     domains: tuple[str, ...] = ()
 

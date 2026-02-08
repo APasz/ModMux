@@ -7,12 +7,13 @@ from urllib.parse import urlsplit
 from httpx import AsyncClient
 from pydantic import AliasChoices, AnyHttpUrl, Field, SecretStr
 
-from ..modmux_errors import ModMuxError, NotFound, ProviderError
 from .._log import get_logger
 from ..cache import ModioLookupCache
 from ..models import Author, LocaleTag, LocalisedText, Mod, ModID, Provider, ProviderCreds
+from ..modmux_errors import ModMuxError, NotFound, ProviderError
 from ..utils.discovery import register
 from ._base import ProviderClient
+from .colour import Colour
 
 log = get_logger(__name__)
 
@@ -116,6 +117,7 @@ class ModioClient(ProviderClient):
 
     name: Provider = Provider.MODIO
     display_name: str = "mod.io"
+    colour: Colour = Colour("#07C1D8", "#FFFFFF", "#F5F7FA")
     base = "https://api.mod.io/v1"
     creds_model = ModioCreds
     domains = ("mod.io",)

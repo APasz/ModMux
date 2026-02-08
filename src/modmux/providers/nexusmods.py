@@ -11,6 +11,7 @@ from .._log import get_logger
 from ..models import Author, LocaleTag, LocalisedText, Mod, ModID, Provider, ProviderCreds
 from ..utils.discovery import register
 from ._base import ProviderClient
+from .colour import Colour
 
 log = get_logger(__name__)
 
@@ -54,6 +55,7 @@ class NexusmodsClient(ProviderClient):
 
     name: Provider = Provider.NEXUSMODS
     display_name: str = "Nexus Mods"
+    colour: Colour = Colour("#FB923C", "#FFFFFF", "#303030")
     base = "https://api.nexusmods.com/v1"
     creds_model = NexusCreds
     domains = ("nexusmods.com",)

@@ -7,11 +7,12 @@ from urllib.parse import parse_qs, urlsplit
 from httpx import AsyncClient
 from pydantic import AliasChoices, AnyHttpUrl, Field, SecretStr
 
-from ..modmux_errors import ModMuxError, NotFound, ProviderError
 from .._log import get_logger
 from ..models import Author, LocaleTag, LocalisedText, Mod, ModID, Provider, ProviderCreds
+from ..modmux_errors import ModMuxError, NotFound, ProviderError
 from ..utils.discovery import register
 from ._base import ProviderClient
+from .colour import Colour
 
 log = get_logger(__name__)
 
@@ -138,6 +139,7 @@ class SteamClient(ProviderClient):
 
     name: Provider = Provider.STEAM
     display_name: str = "Steam Workshop"
+    colour: Colour = Colour("#1A9FFF", "#A1CD44", "#00E4E4", "#171D25", "#C5C3C0")
     base = "https://api.steampowered.com"
     creds_model = SteamCreds
     domains = ("steamcommunity.com",)

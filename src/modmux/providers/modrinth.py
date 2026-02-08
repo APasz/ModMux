@@ -7,11 +7,12 @@ from urllib.parse import urlsplit
 from httpx import AsyncClient
 from pydantic import AliasChoices, AnyHttpUrl, Field, SecretStr
 
-from ..modmux_errors import ModMuxError, ProviderError
 from .._log import get_logger
 from ..models import Author, LocaleTag, LocalisedText, Mod, ModID, Provider, ProviderCreds
+from ..modmux_errors import ModMuxError, ProviderError
 from ..utils.discovery import register
 from ._base import ProviderClient
+from .colour import Colour
 
 log = get_logger(__name__)
 
@@ -82,6 +83,7 @@ class ModrinthClient(ProviderClient):
 
     name: Provider = Provider.MODRINTH
     display_name: str = "Modrinth"
+    colour: Colour = Colour("#1bd96a", "#F8F9FA", "#000000")
     base = "https://api.modrinth.com/v2"
     creds_model = ModrinthCreds
     domains = ("modrinth.com",)

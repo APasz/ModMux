@@ -7,11 +7,12 @@ from urllib.parse import urlsplit
 from httpx import AsyncClient
 from pydantic import AliasChoices, AnyHttpUrl, Field, SecretStr
 
-from ..modmux_errors import ProviderError
 from .._log import get_logger
 from ..models import Author, LocaleTag, LocalisedText, Mod, ModID, Provider, ProviderCreds
+from ..modmux_errors import ProviderError
 from ..utils.discovery import register
 from ._base import ProviderClient
+from .colour import Colour
 
 log = get_logger(__name__)
 
@@ -82,6 +83,7 @@ class WubeClient(ProviderClient):
 
     name: Provider = Provider.WUBE
     display_name: str = "Factorio Mods"
+    colour: Colour = Colour("#201810", "#C5C5C5", "#C78627")
     base = "https://mods.factorio.com/api"
     creds_model = WubeCreds
     domains = ("mods.factorio.com",)

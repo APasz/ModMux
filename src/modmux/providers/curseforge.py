@@ -7,11 +7,12 @@ from urllib.parse import urlsplit
 from httpx import AsyncClient
 from pydantic import AliasChoices, AnyHttpUrl, Field, SecretStr
 
-from ..modmux_errors import NotFound, ProviderError
 from .._log import get_logger
 from ..models import Author, LocaleTag, LocalisedText, Mod, ModID, Provider, ProviderCreds
+from ..modmux_errors import NotFound, ProviderError
 from ..utils.discovery import register
 from ._base import ProviderClient
+from .colour import Colour
 
 log = get_logger(__name__)
 
@@ -82,6 +83,7 @@ class CurseforgeClient(ProviderClient):
 
     name: Provider = Provider.CURSEFORGE
     display_name: str = "CurseForge"
+    colour: Colour = Colour("#F58220", "#FFFFFF", "#222222")
     base = "https://api.curseforge.com/v1"
     creds_model = CurseforgeCreds
     domains = ("curseforge.com",)

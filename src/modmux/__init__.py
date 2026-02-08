@@ -14,6 +14,7 @@ from .models import (
     Provider,
     ProviderCreds,
 )
+from .providers.colour import Colour, ColourValue
 from .providers.curseforge import CurseforgeCreds
 from .providers.modio import ModioCreds
 from .providers.modrinth import ModrinthCreds
@@ -24,6 +25,8 @@ from .utils.urls import parse_url
 
 __all__ = [
     "Author",
+    "Colour",
+    "ColourValue",
     "CurseforgeCreds",
     "Dependency",
     "FileAsset",
