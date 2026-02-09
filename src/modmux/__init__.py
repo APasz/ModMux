@@ -14,6 +14,7 @@ from .models import (
     Provider,
     ProviderCreds,
 )
+from .providers._base import ProviderClient
 from .providers.colour import Colour, ColourValue
 from .providers.curseforge import CurseforgeCreds
 from .providers.modio import ModioCreds
@@ -41,6 +42,7 @@ __all__ = [
     "Muxer",
     "NexusCreds",
     "Provider",
+    "ProviderClient",
     "ProviderCreds",
     "SteamCreds",
     "modmux_client",
