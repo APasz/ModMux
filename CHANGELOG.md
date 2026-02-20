@@ -19,6 +19,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+## 0.2.5
+
+### Added
+- Add generic tri-state toggle helpers: `ToggleMode`, `UNDEFINED`, and `UndefinedType`.
+- Add optional interoperability for `hikari.undefined.UNDEFINED`.
+- Add `Muxer.get_user(...)` and `ProviderClient.get_user(...)` for provider user lookups.
+
+### Changed
+- Steam and Modrinth now use `author_resolution` to control optional author enrichment calls.
+
+
 ## 0.2.4
 
 ### Added

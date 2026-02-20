@@ -63,3 +63,11 @@ class TestProviderHelpers(unittest.IsolatedAsyncioTestCase):
             client = DummyClient(None, http=http)
             with self.assertRaises(ProviderError):
                 await client._get_json("/mods/1")
+
+    async def test_get_user_default_fallback(self) -> None:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, request=request))) as http:
+            client = DummyClient(None, http=http)
+            author = await client.get_user("user-1")
+            self.assertEqual(author.provider, Provider.MODRINTH)
+            self.assertEqual(author.id, "user-1")
+            self.assertEqual(author.name, "user-1")

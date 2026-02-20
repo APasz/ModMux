@@ -9,10 +9,11 @@ import httpx
 from . import providers
 from ._log import get_logger
 from .cache import ModioLookupCache
-from .models import LocaleTag, Mod, ModID, Provider, ProviderCreds
+from .models import Author, LocaleTag, Mod, ModID, Provider, ProviderCreds
 from .providers._base import ProviderClient
-from .utils.urls import parse_url
+from .toggles import ToggleMode, UndefinedType, resolve_toggle
 from .utils.discovery import REGISTRY, load_providers
+from .utils.urls import parse_url
 
 log = get_logger()
 
@@ -105,13 +106,21 @@ class Muxer:
         except KeyError:
             raise ValueError(f"Unknown provider: {provider}")
 
-    async def get_mod(self, provider: Provider, mod_id: ModID, *, locales: list[LocaleTag] | None = None) -> Mod:
+    async def get_mod(
+        self,
+        provider: Provider,
+        mod_id: ModID,
+        *,
+        locales: list[LocaleTag] | None = None,
+        author_resolution: ToggleMode | bool | UndefinedType = ToggleMode.AUTO,
+    ) -> Mod:
         """Fetch a mod using the configured provider client.
 
         Args;
             provider: Provider to query.
             mod_id: Provider-specific mod identifier.
             locales: Optional locale tags to request translations for.
+            author_resolution: Author enrichment toggle.
 
         Returns;
             A normalised Mod instance.
@@ -121,7 +130,21 @@ class Muxer:
         """
         if mod_id.provider != provider:
             raise ValueError(f"ModID.provider must match {provider}, got {mod_id.provider}")
-        return await self._p(provider).get_mod(mod_id, locales=locales)
+        should_enrich_author = resolve_toggle(author_resolution, default=False)
+        next_mode = ToggleMode.ON if should_enrich_author else ToggleMode.OFF
+        return await self._p(provider).get_mod(mod_id, locales=locales, author_resolution=next_mode)
+
+    async def get_user(self, provider: Provider, user_id: str) -> Author:
+        """Fetch a user using the configured provider client.
+
+        Args;
+            provider: Provider to query.
+            user_id: Provider-specific user identifier.
+
+        Returns;
+            A normalised Author instance.
+        """
+        return await self._p(provider).get_user(user_id)
 
     async def get_mod_from_url(
         self,
@@ -129,6 +152,7 @@ class Muxer:
         *,
         game: str | None = None,
         locales: list[LocaleTag] | None = None,
+        author_resolution: ToggleMode | bool | UndefinedType = ToggleMode.AUTO,
     ) -> Mod:
         """Fetch a mod using a provider URL.
 
@@ -136,6 +160,7 @@ class Muxer:
             url: Provider URL to parse.
             game: Optional override for the ModID game field.
             locales: Optional locale tags to request translations for.
+            author_resolution: Author enrichment toggle.
 
         Returns;
             A normalised Mod instance.
@@ -148,7 +173,12 @@ class Muxer:
             raise ValueError(f"Unsupported mod URL: {url!r}")
         if game is not None:
             mod_id = ModID(provider=mod_id.provider, id=mod_id.id, game=game)
-        return await self.get_mod(mod_id.provider, mod_id, locales=locales)
+        return await self.get_mod(
+            mod_id.provider,
+            mod_id,
+            locales=locales,
+            author_resolution=author_resolution,
+        )
 
     async def aclose(self) -> None:
         """Close the internal HTTP client if it is owned by the muxer."""

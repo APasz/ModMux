@@ -15,6 +15,7 @@ from modmux.models import Author, LocaleTag, LocalisedText, Mod, ModID, Provider
 from modmux.providers._base import ProviderClient
 from modmux.providers.modrinth import ModrinthClient, ModrinthCreds
 from modmux.providers.steam import SteamCreds
+from modmux.toggles import UNDEFINED, ToggleMode, UndefinedType
 
 
 class StubProvider(ProviderClient):
@@ -24,11 +25,29 @@ class StubProvider(ProviderClient):
     def __init__(self, creds: ProviderCreds | None, *, http: httpx.AsyncClient, cache: object | None = None) -> None:
         super().__init__(creds, http=http, cache=cache)
         self.last_mod_id: ModID | None = None
+        self.last_author_resolution: ToggleMode = ToggleMode.AUTO
+        self.last_user_id: str | None = None
 
-    async def get_mod(self, mod_id: ModID, *, locales: list[LocaleTag] | None = None) -> Mod:
+    async def get_mod(
+        self,
+        mod_id: ModID,
+        *,
+        locales: list[LocaleTag] | None = None,
+        author_resolution: ToggleMode | bool | UndefinedType = ToggleMode.AUTO,
+    ) -> Mod:
         self.last_mod_id = mod_id
+        if isinstance(author_resolution, ToggleMode):
+            self.last_author_resolution = author_resolution
+        elif author_resolution:
+            self.last_author_resolution = ToggleMode.ON
+        else:
+            self.last_author_resolution = ToggleMode.OFF
         author = Author(provider=Provider.MODRINTH, id="a1", name="Author")
         return Mod(provider=Provider.MODRINTH, id=mod_id, name=LocalisedText(value="Stub"), author=author)
+
+    async def get_user(self, user_id: str) -> Author:
+        self.last_user_id = user_id
+        return Author(provider=Provider.MODRINTH, id=user_id, name=f"user-{user_id}")
 
 
 class TestMuxer(unittest.IsolatedAsyncioTestCase):
@@ -45,12 +64,55 @@ class TestMuxer(unittest.IsolatedAsyncioTestCase):
             stub = StubProvider(None, http=http)
             muxer.providers[Provider.MODRINTH] = stub
 
-            mod = await muxer.get_mod_from_url("https://modrinth.com/mod/fabric-api", game="overridden")
+            mod = await muxer.get_mod_from_url(
+                "https://modrinth.com/mod/fabric-api",
+                game="overridden",
+                author_resolution=True,
+            )
 
             self.assertIsNotNone(stub.last_mod_id)
             assert stub.last_mod_id is not None
             self.assertEqual(stub.last_mod_id.game, "overridden")
+            self.assertEqual(stub.last_author_resolution, ToggleMode.ON)
             self.assertEqual(mod.id, stub.last_mod_id)
+
+    async def test_get_mod_author_resolution_enum(self) -> None:
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, request=request))
+        ) as http:
+            muxer = Muxer(http=http)
+            stub = StubProvider(None, http=http)
+            muxer.providers[Provider.MODRINTH] = stub
+            mod_id = ModID(provider=Provider.MODRINTH, id="abc")
+
+            await muxer.get_mod(Provider.MODRINTH, mod_id, author_resolution=ToggleMode.ON)
+            self.assertEqual(stub.last_author_resolution, ToggleMode.ON)
+
+    async def test_get_mod_author_resolution_undefined(self) -> None:
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, request=request))
+        ) as http:
+            muxer = Muxer(http=http)
+            stub = StubProvider(None, http=http)
+            muxer.providers[Provider.MODRINTH] = stub
+            mod_id = ModID(provider=Provider.MODRINTH, id="abc")
+
+            await muxer.get_mod(Provider.MODRINTH, mod_id, author_resolution=UNDEFINED)
+            self.assertEqual(stub.last_author_resolution, ToggleMode.OFF)
+
+    async def test_get_user_delegates_to_provider(self) -> None:
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, request=request))
+        ) as http:
+            muxer = Muxer(http=http)
+            stub = StubProvider(None, http=http)
+            muxer.providers[Provider.MODRINTH] = stub
+
+            author = await muxer.get_user(Provider.MODRINTH, "abc123")
+
+            self.assertEqual(stub.last_user_id, "abc123")
+            self.assertEqual(author.id, "abc123")
+            self.assertEqual(author.name, "user-abc123")
 
     async def test_get_mod_from_url_unknown(self) -> None:
         async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, request=request))) as http:

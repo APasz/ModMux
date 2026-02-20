@@ -10,6 +10,7 @@ from pydantic import AliasChoices, AnyHttpUrl, Field, SecretStr
 from .._log import get_logger
 from ..models import Author, LocaleTag, LocalisedText, Mod, ModID, Provider, ProviderCreds
 from ..modmux_errors import ModMuxError, ProviderError
+from ..toggles import ToggleMode, UndefinedType, resolve_toggle
 from ..utils.discovery import register
 from ._base import ProviderClient
 from .colour import Colour
@@ -140,12 +141,19 @@ class ModrinthClient(ProviderClient):
         fallback_id = team_id or "unknown"
         return Author(provider=Provider.MODRINTH, id=str(fallback_id), name=str(fallback_id))
 
-    async def get_mod(self, mod_id: ModID, *, locales: list[LocaleTag] | None = None) -> Mod:
+    async def get_mod(
+        self,
+        mod_id: ModID,
+        *,
+        locales: list[LocaleTag] | None = None,
+        author_resolution: ToggleMode | bool | UndefinedType = ToggleMode.AUTO,
+    ) -> Mod:
         """Fetch a single mod from Modrinth.
 
         Args;
             mod_id: Provider-specific mod identifier.
             locales: Optional locale tags to request translations for.
+            author_resolution: Generic tri-state author enrichment toggle.
 
         Returns;
             A normalised Mod instance.
@@ -156,7 +164,11 @@ class ModrinthClient(ProviderClient):
 
         project_id = str(_coalesce(payload.get("id"), mod_id.id))
         team_id = _coalesce(payload.get("team"), payload.get("team_id"))
-        author = await self._fetch_author(project_id, str(team_id) if team_id is not None else None)
+        fallback_author_id = str(team_id) if team_id is not None else "unknown"
+        author = Author(provider=Provider.MODRINTH, id=fallback_author_id, name=fallback_author_id)
+        should_enrich_author = resolve_toggle(author_resolution, default=False)
+        if should_enrich_author:
+            author = await self._fetch_author(project_id, str(team_id) if team_id is not None else None)
 
         slug = _coalesce(payload.get("slug"), payload.get("id"))
         name = _coalesce(payload.get("title"), payload.get("name"), payload.get("slug"), mod_id.id)

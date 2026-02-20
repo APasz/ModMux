@@ -11,6 +11,7 @@ from .._log import get_logger
 from ..cache import ModioLookupCache
 from ..models import Author, LocaleTag, LocalisedText, Mod, ModID, Provider, ProviderCreds
 from ..modmux_errors import ModMuxError, NotFound, ProviderError
+from ..toggles import ToggleMode, UndefinedType
 from ..utils.discovery import register
 from ._base import ProviderClient
 from .colour import Colour
@@ -139,12 +140,19 @@ class ModioClient(ProviderClient):
             return ModID(provider=Provider.MODIO, id=segments[3], game=segments[1])
         return None
 
-    async def get_mod(self, mod_id: ModID, *, locales: list[LocaleTag] | None = None) -> Mod:
+    async def get_mod(
+        self,
+        mod_id: ModID,
+        *,
+        locales: list[LocaleTag] | None = None,
+        author_resolution: ToggleMode | bool | UndefinedType = ToggleMode.AUTO,
+    ) -> Mod:
         """Fetch a single mod from mod.io.
 
         Args;
             mod_id: Provider-specific mod identifier.
             locales: Optional locale tags to request translations for.
+            author_resolution: Author enrichment toggle.
 
         Returns;
             A normalised Mod instance.

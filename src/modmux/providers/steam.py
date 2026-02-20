@@ -10,6 +10,7 @@ from pydantic import AliasChoices, AnyHttpUrl, Field, SecretStr
 from .._log import get_logger
 from ..models import Author, LocaleTag, LocalisedText, Mod, ModID, Provider, ProviderCreds
 from ..modmux_errors import ModMuxError, NotFound, ProviderError
+from ..toggles import ToggleMode, UndefinedType, resolve_toggle
 from ..utils.discovery import register
 from ._base import ProviderClient
 from .colour import Colour
@@ -169,12 +170,63 @@ class SteamClient(ProviderClient):
             game = query["appid"][0]
         return ModID(provider=Provider.STEAM, id=mod_id, game=game)
 
-    async def get_mod(self, mod_id: ModID, *, locales: list[LocaleTag] | None = None) -> Mod:
+    async def get_user(self, user_id: str) -> Author:
+        """Fetch Steam user metadata by SteamID.
+
+        Args;
+            user_id: Steam user identifier.
+
+        Returns;
+            A normalised Author instance.
+        """
+        steam_id = str(user_id).strip()
+        if not steam_id:
+            raise ValueError("Steam user id must be non-empty.")
+
+        data = await self._get_json("ISteamUser/GetPlayerSummaries/v2/", params={"steamids": steam_id})
+        response = data.get("response") if isinstance(data, dict) else None
+        if not isinstance(response, dict):
+            raise ProviderError(f"{self.name}: unexpected user response shape")
+
+        players = response.get("players")
+        if not isinstance(players, list):
+            raise ProviderError(f"{self.name}: unexpected players payload")
+
+        player: dict | None = None
+        for entry in players:
+            if not isinstance(entry, dict):
+                continue
+            entry_id = _coalesce(entry.get("steamid"), entry.get("id"))
+            if entry_id is not None and str(entry_id) == steam_id:
+                player = entry
+                break
+
+        if player is None:
+            for entry in players:
+                if isinstance(entry, dict):
+                    player = entry
+                    break
+
+        if player is None:
+            raise NotFound(f"{self.name}: user {steam_id!r} not found")
+
+        resolved_id = _coalesce(player.get("steamid"), player.get("id"), steam_id)
+        display_name = _coalesce(player.get("personaname"), player.get("realname"), resolved_id, steam_id)
+        return Author(provider=Provider.STEAM, id=str(resolved_id), name=str(display_name))
+
+    async def get_mod(
+        self,
+        mod_id: ModID,
+        *,
+        locales: list[LocaleTag] | None = None,
+        author_resolution: ToggleMode | bool | UndefinedType = ToggleMode.AUTO,
+    ) -> Mod:
         """Fetch a single mod from Steam Workshop.
 
         Args;
             mod_id: Provider-specific mod identifier.
             locales: Optional locale tags to request translations for.
+            author_resolution: Author enrichment toggle.
 
         Returns;
             A normalised Mod instance.
@@ -260,8 +312,14 @@ class SteamClient(ProviderClient):
         created_at = _parse_timestamp(details.get("time_created"))
         updated_at = _parse_timestamp(details.get("time_updated"))
 
-        author_id = _coalesce(details.get("creator"), "unknown")
-        author = Author(provider=Provider.STEAM, id=str(author_id), name=str(author_id))
+        author_id = str(_coalesce(details.get("creator"), "unknown"))
+        author = Author(provider=Provider.STEAM, id=author_id, name=author_id)
+        should_enrich_author = resolve_toggle(author_resolution, default=False)
+        if should_enrich_author and author_id != "unknown":
+            try:
+                author = await self.get_user(author_id)
+            except ModMuxError as exc:
+                log.debug("Steam user lookup failed for %s: %s", author_id, exc)
 
         tags = _extract_tags(details.get("tags"))
 

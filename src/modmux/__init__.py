@@ -22,6 +22,7 @@ from .providers.modrinth import ModrinthCreds
 from .providers.nexusmods import NexusCreds
 from .providers.steam import SteamCreds
 from .providers.wube import WubeCreds
+from .toggles import ToggleMode
 from .utils.urls import parse_url
 
 __all__ = [
@@ -45,6 +46,7 @@ __all__ = [
     "ProviderClient",
     "ProviderCreds",
     "SteamCreds",
+    "ToggleMode",
     "modmux_client",
     "parse_url",
     "WubeCreds",

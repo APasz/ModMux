@@ -10,9 +10,10 @@ import httpx
 from aiolimiter import AsyncLimiter
 from httpx import RemoteProtocolError
 
-from ..modmux_errors import AuthError, NotFound, ProviderError, RateLimited
 from .._log import get_logger
-from ..models import LocaleTag, Mod, ModID, Provider, ProviderCreds
+from ..models import Author, LocaleTag, Mod, ModID, Provider, ProviderCreds
+from ..modmux_errors import AuthError, NotFound, ProviderError, RateLimited
+from ..toggles import ToggleMode, UndefinedType
 from .colour import Colour
 
 log = get_logger("base")
@@ -40,17 +41,39 @@ class ProviderClient(abc.ABC):
         self.limiter = AsyncLimiter(5, 1)
         self.cache = cache
 
-    async def get_mod(self, mod_id: ModID, *, locales: list[LocaleTag] | None = None) -> Mod:  # * override per provider
+    async def get_mod(
+        self,
+        mod_id: ModID,
+        *,
+        locales: list[LocaleTag] | None = None,
+        author_resolution: ToggleMode | bool | UndefinedType = ToggleMode.AUTO,
+    ) -> Mod:  # * override per provider
         """Fetch a mod by provider-specific identifier.
 
         Args;
             mod_id: Provider-specific mod identifier.
             locales: Optional locale tags to request translations for.
+            author_resolution: Author enrichment toggle.
 
         Returns;
             A normalised Mod instance.
         """
         ...
+
+    async def get_user(self, user_id: str) -> Author:
+        """Fetch a provider user by id.
+
+        Providers with dedicated user endpoints can override this. The base
+        implementation is a cheap fallback that mirrors id into name.
+
+        Args;
+            user_id: Provider user identifier.
+
+        Returns;
+            A normalised Author instance.
+        """
+        value = str(user_id).strip() or "unknown"
+        return Author(provider=self.name, id=value, name=value)
 
     async def close(self) -> None:
         """Close the underlying HTTP client if it is still open."""
