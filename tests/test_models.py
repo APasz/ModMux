@@ -17,6 +17,7 @@ class TestModels(unittest.TestCase):
 
         self.assertEqual(mod.tags, [])
         self.assertEqual(mod.raw, {})
+        self.assertEqual(mod.author.raw, {})
         self.assertIsNone(mod.latest_version)
         self.assertIsInstance(mod.name, LocalisedText)
         self.assertEqual(mod.name.value, "Fabric API")

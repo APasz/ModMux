@@ -111,6 +111,7 @@ class Author(BaseModel):
     provider: Provider
     id: str
     name: str
+    raw: dict[str, Any] = Field(default_factory=dict)
 
     def __hash__(self) -> int:
         return hash((self.provider, self.id, self.name))

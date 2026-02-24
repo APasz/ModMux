@@ -50,6 +50,7 @@ class TestModrinthClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mod.name.value, "Fabric API")
         self.assertEqual(mod.author.id, "u1")
         self.assertEqual(mod.author.name, "AuthorOne")
+        self.assertEqual(mod.author.raw.get("role"), "admin")
         self.assertEqual(mod.tags, ["utility", "library"])
         self.assertEqual(mod.latest_version_id, "v1")
         self.assertEqual(str(mod.homepage), "https://modrinth.com/mod/fabric-api")
@@ -83,3 +84,4 @@ class TestModrinthClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls["members"], 0)
         self.assertEqual(mod.author.id, "team-1")
         self.assertEqual(mod.author.name, "team-1")
+        self.assertEqual(mod.author.raw, {"team_id": "team-1"})

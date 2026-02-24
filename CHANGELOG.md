@@ -19,6 +19,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+## 0.2.6
+
+### Added
+- Add `Author.raw` for preserving provider-specific author/user metadata.
+
+### Changed
+- Populate `Author.raw` across built-in providers where author sub-payloads are available.
+- Steam `get_user(...)` now returns raw Steam player summary data in `Author.raw`.
+
 ## 0.2.5
 
 ### Added

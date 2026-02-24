@@ -167,11 +167,13 @@ class CurseforgeClient(ProviderClient):
         authors = payload.get("authors")
         author_id = "unknown"
         author_name = "unknown"
+        author_raw: dict[str, object] = {}
         if isinstance(authors, list) and authors:
             first = authors[0]
             if isinstance(first, dict):
                 author_id = str(_coalesce(first.get("id"), first.get("userId"), author_id))
                 author_name = str(_coalesce(first.get("name"), first.get("username"), author_id))
+                author_raw = dict(first)
 
         latest_files = payload.get("latestFiles")
         latest_version_id = None
@@ -186,7 +188,7 @@ class CurseforgeClient(ProviderClient):
             id=str(payload.get("id", mod_value)),
             game=str(game_id) if game_id else None,
         )
-        author = Author(provider=Provider.CURSEFORGE, id=str(author_id), name=str(author_name))
+        author = Author(provider=Provider.CURSEFORGE, id=str(author_id), name=str(author_name), raw=author_raw)
 
         return Mod(
             provider=Provider.CURSEFORGE,

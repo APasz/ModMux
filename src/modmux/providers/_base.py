@@ -73,7 +73,7 @@ class ProviderClient(abc.ABC):
             A normalised Author instance.
         """
         value = str(user_id).strip() or "unknown"
-        return Author(provider=self.name, id=value, name=value)
+        return Author(provider=self.name, id=value, name=value, raw={})
 
     async def close(self) -> None:
         """Close the underlying HTTP client if it is still open."""

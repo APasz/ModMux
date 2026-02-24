@@ -146,7 +146,7 @@ class NexusmodsClient(ProviderClient):
             homepage = None
 
         mod_key = ModID(provider=Provider.NEXUSMODS, id=str(mod_id.id), game=mod_id.game)
-        author = Author(provider=Provider.NEXUSMODS, id=str(author_id), name=str(author_name))
+        author = Author(provider=Provider.NEXUSMODS, id=str(author_id), name=str(author_name), raw=dict(user))
 
         description = _coalesce(data.get("description"), data.get("description_markdown"), data.get("summary"))
         if description is not None:

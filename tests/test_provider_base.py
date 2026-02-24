@@ -71,3 +71,4 @@ class TestProviderHelpers(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(author.provider, Provider.MODRINTH)
             self.assertEqual(author.id, "user-1")
             self.assertEqual(author.name, "user-1")
+            self.assertEqual(author.raw, {})

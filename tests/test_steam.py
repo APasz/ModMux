@@ -99,6 +99,7 @@ class TestSteamClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls["user"], 0)
         self.assertEqual(mod.author.id, "76561198000000001")
         self.assertEqual(mod.author.name, "76561198000000001")
+        self.assertEqual(mod.author.raw, {"creator": "76561198000000001"})
 
     async def test_get_mod_resolves_author_when_requested(self) -> None:
         calls: dict[str, int] = {"details": 0, "user": 0}
@@ -145,3 +146,5 @@ class TestSteamClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls["user"], 1)
         self.assertEqual(mod.author.id, "76561198000000001")
         self.assertEqual(mod.author.name, "DisplayName")
+        self.assertEqual(mod.author.raw.get("steamid"), "76561198000000001")
+        self.assertEqual(mod.author.raw.get("personaname"), "DisplayName")

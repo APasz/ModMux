@@ -250,7 +250,7 @@ class ModioClient(ProviderClient):
 
         game_id = _coalesce(payload.get("game_id"), game_id)
         mod_key = ModID(provider=Provider.MODIO, id=str(_coalesce(payload.get("id"), mod_value)), game=str(game_id))
-        author = Author(provider=Provider.MODIO, id=str(author_id), name=str(author_name))
+        author = Author(provider=Provider.MODIO, id=str(author_id), name=str(author_name), raw=dict(submitted_by))
 
         if self.cache:
             payload_slug = _coalesce(payload.get("name_id"), payload.get("slug"))

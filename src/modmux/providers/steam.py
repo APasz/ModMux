@@ -212,7 +212,7 @@ class SteamClient(ProviderClient):
 
         resolved_id = _coalesce(player.get("steamid"), player.get("id"), steam_id)
         display_name = _coalesce(player.get("personaname"), player.get("realname"), resolved_id, steam_id)
-        return Author(provider=Provider.STEAM, id=str(resolved_id), name=str(display_name))
+        return Author(provider=Provider.STEAM, id=str(resolved_id), name=str(display_name), raw=player)
 
     async def get_mod(
         self,
@@ -313,7 +313,11 @@ class SteamClient(ProviderClient):
         updated_at = _parse_timestamp(details.get("time_updated"))
 
         author_id = str(_coalesce(details.get("creator"), "unknown"))
-        author = Author(provider=Provider.STEAM, id=author_id, name=author_id)
+        author_raw: dict[str, object] = {}
+        creator = details.get("creator")
+        if creator is not None:
+            author_raw = {"creator": creator}
+        author = Author(provider=Provider.STEAM, id=author_id, name=author_id, raw=author_raw)
         should_enrich_author = resolve_toggle(author_resolution, default=False)
         if should_enrich_author and author_id != "unknown":
             try:

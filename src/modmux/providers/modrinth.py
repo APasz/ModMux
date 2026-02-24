@@ -136,10 +136,13 @@ class ModrinthClient(ProviderClient):
                     user = {}
                 author_id = _coalesce(user.get("id"), user.get("user_id"), chosen.get("user_id"), team_id, "unknown")
                 author_name = _coalesce(user.get("username"), user.get("name"), author_id, "unknown")
-                return Author(provider=Provider.MODRINTH, id=str(author_id), name=str(author_name))
+                return Author(provider=Provider.MODRINTH, id=str(author_id), name=str(author_name), raw=dict(chosen))
 
         fallback_id = team_id or "unknown"
-        return Author(provider=Provider.MODRINTH, id=str(fallback_id), name=str(fallback_id))
+        fallback_raw: dict[str, object] = {}
+        if team_id is not None:
+            fallback_raw = {"team_id": team_id}
+        return Author(provider=Provider.MODRINTH, id=str(fallback_id), name=str(fallback_id), raw=fallback_raw)
 
     async def get_mod(
         self,
@@ -165,7 +168,10 @@ class ModrinthClient(ProviderClient):
         project_id = str(_coalesce(payload.get("id"), mod_id.id))
         team_id = _coalesce(payload.get("team"), payload.get("team_id"))
         fallback_author_id = str(team_id) if team_id is not None else "unknown"
-        author = Author(provider=Provider.MODRINTH, id=fallback_author_id, name=fallback_author_id)
+        author_raw: dict[str, object] = {}
+        if team_id is not None:
+            author_raw = {"team_id": str(team_id)}
+        author = Author(provider=Provider.MODRINTH, id=fallback_author_id, name=fallback_author_id, raw=author_raw)
         should_enrich_author = resolve_toggle(author_resolution, default=False)
         if should_enrich_author:
             author = await self._fetch_author(project_id, str(team_id) if team_id is not None else None)

@@ -130,7 +130,7 @@ class WubeClient(ProviderClient):
             description = str(description)
 
         owner = _coalesce(payload.get("owner"), payload.get("author"), "unknown")
-        author = Author(provider=Provider.WUBE, id=str(owner), name=str(owner))
+        author = Author(provider=Provider.WUBE, id=str(owner), name=str(owner), raw={"owner": owner})
 
         tags = _extract_tags(payload.get("tags"))
         category = _coalesce(payload.get("category"))
