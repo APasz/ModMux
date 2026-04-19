@@ -8,7 +8,7 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from modmux.models import ModID, Provider
+from modmux.models import DependencyRelation, ModID, Provider
 from modmux.providers.curseforge import CurseforgeClient
 
 
@@ -20,6 +20,15 @@ class TestCurseforgeClient(unittest.IsolatedAsyncioTestCase):
     async def test_get_mod_maps_slug_lookup_and_fields(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
             path = request.url.path
+            if path.endswith("/games"):
+                return httpx.Response(
+                    200,
+                    json={
+                        "data": [{"id": 432, "slug": "minecraft"}],
+                        "pagination": {"index": 0, "pageSize": 50, "resultCount": 1, "totalCount": 1},
+                    },
+                    request=request,
+                )
             if path.endswith("/mods/search"):
                 self.assertEqual(request.url.params.get("gameId"), "432")
                 self.assertEqual(request.url.params.get("slug"), "jei")
@@ -39,7 +48,25 @@ class TestCurseforgeClient(unittest.IsolatedAsyncioTestCase):
                             "links": {"websiteUrl": "https://example.com/jei"},
                             "categories": ["utility", {"name": "api"}],
                             "authors": [{"id": 7, "name": "mezz"}],
-                            "latestFiles": [{"id": 99}],
+                            "latestFiles": [
+                                {"id": 98, "fileDate": "2023-01-02T00:00:00Z"},
+                                {
+                                    "id": 99,
+                                    "displayName": "JEI 1.19.2",
+                                    "fileName": "jei.jar",
+                                    "fileDate": "2023-01-03T00:00:00Z",
+                                    "fileLength": 1234,
+                                    "gameVersions": ["1.19.2"],
+                                    "dependencies": [
+                                        {"modId": 6, "relationType": 1},
+                                        {"modId": 7, "relationType": 3},
+                                        {"modId": 8, "relationType": 2},
+                                        {"modId": 9, "relationType": 5},
+                                        {"modId": 10, "relationType": 4},
+                                        {"modId": 11, "relationType": 6},
+                                    ],
+                                },
+                            ],
                         }
                     },
                     request=request,
@@ -49,7 +76,7 @@ class TestCurseforgeClient(unittest.IsolatedAsyncioTestCase):
         transport = httpx.MockTransport(handler)
         async with httpx.AsyncClient(transport=transport) as http:
             client = CurseforgeClient(None, http=http)
-            mod = await client.get_mod(ModID(provider=Provider.CURSEFORGE, id="jei", game="432"))
+            mod = await client.get_mod(ModID(provider=Provider.CURSEFORGE, id="jei", game="minecraft"))
 
         self.assertEqual(mod.id.id, "238222")
         self.assertEqual(mod.id.game, "432")
@@ -60,6 +87,26 @@ class TestCurseforgeClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mod.tags, ["utility", "api"])
         self.assertEqual(mod.latest_version_id, "99")
         self.assertEqual(str(mod.homepage), "https://example.com/jei")
+        self.assertIsNotNone(mod.latest_version)
+        assert mod.latest_version is not None
+        self.assertEqual(mod.latest_version.version, "99")
+        self.assertEqual(mod.latest_version.files[0].filename, "jei.jar")
+        self.assertEqual(mod.latest_version.game_versions, ["1.19.2"])
+        self.assertEqual(
+            [dependency.id.id for dependency in mod.latest_version.dependencies],
+            ["6", "7", "8", "9", "10", "11"],
+        )
+        self.assertEqual(
+            [dependency.relation for dependency in mod.latest_version.dependencies],
+            [
+                DependencyRelation.EMBEDDED,
+                DependencyRelation.REQUIRED,
+                DependencyRelation.OPTIONAL,
+                DependencyRelation.INCOMPATIBLE,
+                DependencyRelation.TOOL,
+                DependencyRelation.INCLUDED,
+            ],
+        )
 
     async def test_get_mod_slug_requires_game(self) -> None:
         async with httpx.AsyncClient(transport=_ok_transport()) as http:

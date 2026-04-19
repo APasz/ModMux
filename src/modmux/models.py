@@ -18,6 +18,17 @@ class Provider(StrEnum):
     STEAM = "STEAM"
 
 
+class DependencyRelation(StrEnum):
+    """Supported dependency relationship types."""
+
+    REQUIRED = "required"
+    OPTIONAL = "optional"
+    INCOMPATIBLE = "incompatible"
+    EMBEDDED = "embedded"
+    TOOL = "tool"
+    INCLUDED = "included"
+
+
 LocaleTag = Annotated[
     str,
     StringConstraints(
@@ -139,7 +150,7 @@ class Dependency(BaseModel):
     provider: Provider | None = None
     id: ModID
     version_req: str | None = None
-    optional: bool = False
+    relation: DependencyRelation = DependencyRelation.REQUIRED
 
 class FileAsset(BaseModel):
     """File metadata for mod releases."""

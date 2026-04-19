@@ -1,6 +1,6 @@
 """Steam Workshop provider integration."""
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import cast
 from urllib.parse import parse_qs, urlsplit
@@ -296,11 +296,11 @@ class SteamClient(ProviderClient):
     def _build_mod(
         self,
         requested: ModID,
-        details: Mapping[str, object],
+        details: dict[str, object],
         *,
         name_translations: dict[LocaleTag, str],
         description_translations: dict[LocaleTag, str],
-        authors: Mapping[str, Author],
+        authors: dict[str, Author],
     ) -> Mod:
         result = details.get("result")
         if result is not None:

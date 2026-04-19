@@ -1,6 +1,6 @@
 """CurseForge provider integration."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import cast
 from urllib.parse import urlsplit
@@ -9,7 +9,19 @@ from httpx import AsyncClient
 from pydantic import AliasChoices, AnyHttpUrl, Field, SecretStr
 
 from .._log import get_logger
-from ..models import Author, LocaleTag, LocalisedText, Mod, ModID, Provider, ProviderCreds
+from ..models import (
+    Author,
+    Dependency,
+    DependencyRelation,
+    FileAsset,
+    LocaleTag,
+    LocalisedText,
+    Mod,
+    ModID,
+    ModVersion,
+    Provider,
+    ProviderCreds,
+)
 from ..modmux_errors import NotFound, ProviderError
 from ..toggles import ToggleMode, UndefinedType
 from ..utils.discovery import register
@@ -79,6 +91,46 @@ def _clean_url(value: object | None) -> str | None:
     return url
 
 
+def _relation_from_file_type(value: object | None) -> DependencyRelation | None:
+    if value is None:
+        return None
+    if not isinstance(value, (str, int)):
+        return None
+    try:
+        relation_type = int(value)
+    except (TypeError, ValueError):
+        return None
+    relation_by_type = {
+        1: DependencyRelation.EMBEDDED,
+        2: DependencyRelation.OPTIONAL,
+        3: DependencyRelation.REQUIRED,
+        4: DependencyRelation.TOOL,
+        5: DependencyRelation.INCOMPATIBLE,
+        6: DependencyRelation.INCLUDED,
+    }
+    return relation_by_type.get(relation_type)
+
+
+def _pick_latest_file(latest_files: object) -> Mapping[str, object] | None:
+    if not isinstance(latest_files, list):
+        return None
+
+    best_file: Mapping[str, object] | None = None
+    best_timestamp: datetime | None = None
+    for entry in latest_files:
+        if not isinstance(entry, dict):
+            continue
+        file_timestamp = _parse_timestamp(entry.get("fileDate"))
+        if best_file is None:
+            best_file = entry
+            best_timestamp = file_timestamp
+            continue
+        if file_timestamp is not None and (best_timestamp is None or file_timestamp > best_timestamp):
+            best_file = entry
+            best_timestamp = file_timestamp
+    return best_file
+
+
 @register
 class CurseforgeClient(ProviderClient):
     """Client for CurseForge mod metadata."""
@@ -92,6 +144,7 @@ class CurseforgeClient(ProviderClient):
 
     def __init__(self, creds: CurseforgeCreds | None, *, http: AsyncClient, cache: object | None = None) -> None:
         super().__init__(creds, http=http, cache=cache)
+        self._game_slug_cache: dict[str, str] = {}
 
     @classmethod
     def parse_url(cls, url: str) -> ModID | None:
@@ -107,15 +160,127 @@ class CurseforgeClient(ProviderClient):
         slug = segments[2]
         return ModID(provider=Provider.CURSEFORGE, id=slug, game=game)
 
+    async def _resolve_game_id(self, game: str) -> str:
+        game_value = str(game).strip()
+        if game_value.isdigit():
+            return game_value
+
+        cached = self._game_slug_cache.get(game_value)
+        if cached is not None:
+            return cached
+
+        normalised_game = game_value.casefold()
+        index = 0
+        page_size = 50
+        total_count: int | None = None
+        while total_count is None or index < total_count:
+            data = await self._get_json("games", params={"index": index, "pageSize": page_size})
+            payloads = data.get("data") if isinstance(data, dict) else None
+            pagination = data.get("pagination") if isinstance(data, dict) else None
+            if not isinstance(payloads, list):
+                raise ProviderError(f"{self.name}: unexpected games response shape")
+            if not isinstance(pagination, dict):
+                raise ProviderError(f"{self.name}: missing games pagination")
+
+            result_count = pagination.get("resultCount")
+            total_raw = pagination.get("totalCount")
+            if not isinstance(result_count, int) or not isinstance(total_raw, int):
+                raise ProviderError(f"{self.name}: unexpected games pagination")
+            total_count = total_raw
+
+            for payload in payloads:
+                if not isinstance(payload, dict):
+                    continue
+                slug = _coalesce(payload.get("slug"))
+                if slug is None or str(slug).casefold() != normalised_game:
+                    continue
+                game_id = payload.get("id")
+                if game_id is None:
+                    raise ProviderError(f"{self.name}: game payload missing id")
+                resolved_id = str(game_id)
+                self._game_slug_cache[game_value] = resolved_id
+                self._game_slug_cache[str(slug)] = resolved_id
+                return resolved_id
+
+            if result_count <= 0:
+                break
+            index += result_count
+
+        raise NotFound(f"{self.name}: game {game!r} not found")
+
+    def _build_latest_version(self, mod_key: ModID, latest_file: Mapping[str, object] | None) -> ModVersion | None:
+        if latest_file is None:
+            return None
+
+        file_id = latest_file.get("id")
+        file_name = _coalesce(latest_file.get("fileName"), latest_file.get("displayName"))
+        if file_id is None and file_name is None:
+            return None
+
+        files: list[FileAsset] = []
+        if file_id is not None and file_name is not None:
+            file_length = latest_file.get("fileLength")
+            size_bytes = file_length if isinstance(file_length, int) else None
+            files.append(
+                FileAsset(
+                    file_id=str(file_id),
+                    filename=str(file_name),
+                    size_bytes=size_bytes,
+                )
+            )
+
+        dependencies: list[Dependency] = []
+        raw_dependencies = latest_file.get("dependencies")
+        if isinstance(raw_dependencies, list):
+            for entry in raw_dependencies:
+                if not isinstance(entry, dict):
+                    continue
+                dependency_mod_id = entry.get("modId")
+                relation = _relation_from_file_type(entry.get("relationType"))
+                if dependency_mod_id is None or relation is None:
+                    continue
+                dependency_id = ModID(
+                    provider=Provider.CURSEFORGE,
+                    id=str(dependency_mod_id),
+                    game=mod_key.game,
+                )
+                dependencies.append(
+                    Dependency(
+                        provider=Provider.CURSEFORGE,
+                        id=dependency_id,
+                        relation=relation,
+                    )
+                )
+
+        raw_game_versions = latest_file.get("gameVersions")
+        game_versions = [str(version) for version in raw_game_versions if isinstance(version, str)] if isinstance(
+            raw_game_versions, list
+        ) else []
+
+        return ModVersion(
+            id=mod_key,
+            name=str(_coalesce(latest_file.get("displayName"), file_name, file_id)) if (file_name or file_id) else None,
+            version=str(file_id) if file_id is not None else None,
+            published_at=_parse_timestamp(latest_file.get("fileDate")),
+            game_versions=game_versions,
+            files=files,
+            dependencies=dependencies,
+            raw=dict(latest_file),
+        )
+
     async def _resolve_mod_id(self, mod_id: ModID) -> tuple[str, str | None]:
         mod_value = str(mod_id.id).strip()
         if mod_value.isdigit():
-            return mod_value, mod_id.game
+            game_id = None
+            if mod_id.game is not None:
+                game_id = await self._resolve_game_id(str(mod_id.game))
+            return mod_value, game_id
         if not mod_id.game:
             raise ValueError("CurseForge slug lookup requires ModID.game (game id).")
+        game_id = await self._resolve_game_id(str(mod_id.game))
         search = await self._get_json(
             "mods/search",
-            params={"gameId": mod_id.game, "slug": mod_value, "pageSize": 1},
+            params={"gameId": game_id, "slug": mod_value, "pageSize": 1},
         )
         search_data = search.get("data") if isinstance(search, dict) else None
         if not isinstance(search_data, list) or not search_data:
@@ -123,7 +288,7 @@ class CurseforgeClient(ProviderClient):
         first = search_data[0]
         if not isinstance(first, dict) or first.get("id") is None:
             raise ProviderError(f"{self.name}: unexpected search response")
-        return str(first["id"]), str(mod_id.game)
+        return str(first["id"]), game_id
 
     def _build_mod(self, requested: ModID, payload: dict[str, object], mod_value: str) -> Mod:
         name = _coalesce(payload.get("name"), payload.get("slug"), requested.id)
@@ -154,13 +319,6 @@ class CurseforgeClient(ProviderClient):
                 author_name = str(_coalesce(first.get("name"), first.get("username"), author_id))
                 author_raw = dict(first)
 
-        latest_files = payload.get("latestFiles")
-        latest_version_id = None
-        if isinstance(latest_files, list) and latest_files:
-            first_file = latest_files[0]
-            if isinstance(first_file, dict) and first_file.get("id") is not None:
-                latest_version_id = str(first_file.get("id"))
-
         game_id = _coalesce(payload.get("gameId"), requested.game)
         mod_key = ModID(
             provider=Provider.CURSEFORGE,
@@ -168,6 +326,9 @@ class CurseforgeClient(ProviderClient):
             game=str(game_id) if game_id else None,
         )
         author = Author(provider=Provider.CURSEFORGE, id=str(author_id), name=str(author_name), raw=author_raw)
+        latest_file = _pick_latest_file(payload.get("latestFiles"))
+        latest_version = self._build_latest_version(mod_key, latest_file)
+        latest_version_id = latest_version.version if latest_version is not None else None
 
         return Mod(
             provider=Provider.CURSEFORGE,
@@ -181,6 +342,7 @@ class CurseforgeClient(ProviderClient):
             created_at=created_at,
             updated_at=updated_at,
             latest_version_id=latest_version_id,
+            latest_version=latest_version,
             raw=payload,
         )
 

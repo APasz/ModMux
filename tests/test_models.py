@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from modmux.models import Author, LocalisedText, Mod, ModID, ModVersion, Provider
+from modmux.models import Author, Dependency, DependencyRelation, LocalisedText, Mod, ModID, ModVersion, Provider
 
 
 class TestModels(unittest.TestCase):
@@ -29,6 +29,11 @@ class TestModels(unittest.TestCase):
         self.assertEqual(version.files, [])
         self.assertEqual(version.dependencies, [])
         self.assertEqual(version.game_versions, [])
+
+    def test_dependency_defaults(self) -> None:
+        dependency = Dependency(id=ModID(provider=Provider.WUBE, id="base"))
+
+        self.assertEqual(dependency.relation, DependencyRelation.REQUIRED)
 
     def test_provider_enum(self) -> None:
         self.assertEqual(Provider("MODRINTH"), Provider.MODRINTH)

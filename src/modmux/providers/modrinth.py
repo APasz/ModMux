@@ -10,7 +10,19 @@ from httpx import AsyncClient
 from pydantic import AliasChoices, AnyHttpUrl, Field, SecretStr
 
 from .._log import get_logger
-from ..models import Author, LocaleTag, LocalisedText, Mod, ModID, Provider, ProviderCreds
+from ..models import (
+    Author,
+    Dependency,
+    DependencyRelation,
+    FileAsset,
+    LocaleTag,
+    LocalisedText,
+    Mod,
+    ModID,
+    ModVersion,
+    Provider,
+    ProviderCreds,
+)
 from ..modmux_errors import ModMuxError, NotFound, ProviderError
 from ..toggles import ToggleMode, UndefinedType, resolve_toggle
 from ..utils.discovery import register
@@ -78,6 +90,28 @@ def _clean_url(value: object | None) -> str | None:
     if not url.startswith(("http://", "https://")):
         return None
     return url
+
+
+def _relation_from_dependency_type(value: object) -> DependencyRelation | None:
+    if not isinstance(value, str):
+        return None
+    match value:
+        case "required":
+            return DependencyRelation.REQUIRED
+        case "optional":
+            return DependencyRelation.OPTIONAL
+        case "incompatible":
+            return DependencyRelation.INCOMPATIBLE
+        case "embedded":
+            return DependencyRelation.EMBEDDED
+        case _:
+            return None
+
+
+def _extract_string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(entry) for entry in value if isinstance(entry, str)]
 
 
 @register
@@ -148,7 +182,77 @@ class ModrinthClient(ProviderClient):
             members = None
         return self._author_from_members(team_id, members)
 
-    def _build_mod(self, requested: ModID, payload: dict[str, object], author: Author) -> Mod:
+    def _build_latest_version(self, mod_key: ModID, payload: object) -> ModVersion | None:
+        if not isinstance(payload, dict):
+            return None
+
+        version_id = payload.get("id")
+        version_name = _coalesce(payload.get("name"), payload.get("version_number"), version_id)
+        if version_name is None:
+            return None
+
+        files: list[FileAsset] = []
+        raw_files = payload.get("files")
+        if isinstance(raw_files, list):
+            for file_payload in raw_files:
+                if not isinstance(file_payload, dict):
+                    continue
+                filename = file_payload.get("filename")
+                if not isinstance(filename, str):
+                    continue
+                size = file_payload.get("size")
+                files.append(
+                    FileAsset(
+                        file_id=str(_coalesce(file_payload.get("url"), filename)),
+                        filename=filename,
+                        size_bytes=size if isinstance(size, int) else None,
+                    )
+                )
+
+        dependencies: list[Dependency] = []
+        raw_dependencies = payload.get("dependencies")
+        if isinstance(raw_dependencies, list):
+            for dependency_payload in raw_dependencies:
+                if not isinstance(dependency_payload, dict):
+                    continue
+                project_id = dependency_payload.get("project_id")
+                relation = _relation_from_dependency_type(dependency_payload.get("dependency_type"))
+                if project_id is None or relation is None:
+                    continue
+                dependency_version_id = dependency_payload.get("version_id")
+                dependencies.append(
+                    Dependency(
+                        provider=Provider.MODRINTH,
+                        id=ModID(provider=Provider.MODRINTH, id=str(project_id)),
+                        version_req=str(dependency_version_id) if dependency_version_id is not None else None,
+                        relation=relation,
+                    )
+                )
+
+        changelog = payload.get("changelog")
+        if changelog is not None:
+            changelog = str(changelog)
+
+        return ModVersion(
+            id=mod_key,
+            name=str(version_name),
+            version=str(_coalesce(payload.get("version_number"), version_id, version_name)),
+            changelog_md=cast(str | None, changelog),
+            published_at=_parse_timestamp(payload.get("date_published")),
+            game_versions=_extract_string_list(payload.get("game_versions")),
+            loaders=_extract_string_list(payload.get("loaders")),
+            files=files,
+            dependencies=dependencies,
+            raw=dict(payload),
+        )
+
+    def _build_mod(
+        self,
+        requested: ModID,
+        payload: dict[str, object],
+        author: Author,
+        latest_version: ModVersion | None,
+    ) -> Mod:
         project_id = str(_coalesce(payload.get("id"), requested.id))
         slug = _coalesce(payload.get("slug"), payload.get("id"))
         name = _coalesce(payload.get("title"), payload.get("name"), payload.get("slug"), requested.id)
@@ -191,6 +295,7 @@ class ModrinthClient(ProviderClient):
             created_at=created_at,
             updated_at=updated_at,
             latest_version_id=latest_version_id,
+            latest_version=latest_version,
             raw=payload,
         )
 
@@ -281,6 +386,43 @@ class ModrinthClient(ProviderClient):
                         if author is not None:
                             authors_by_request[str(requested.id)] = author
 
+        latest_version_ids: list[str] = []
+        for requested in requests:
+            payload = payload_by_request.get(str(requested.id))
+            if not isinstance(payload, dict):
+                continue
+            raw_versions = payload.get("versions")
+            if not isinstance(raw_versions, list) or not raw_versions:
+                continue
+            latest_version_id = raw_versions[0]
+            if latest_version_id is None:
+                continue
+            version_value = str(latest_version_id)
+            if version_value not in latest_version_ids:
+                latest_version_ids.append(version_value)
+
+        latest_versions_by_id: dict[str, ModVersion] = {}
+        if latest_version_ids:
+            try:
+                versions_payload = await self._get_json("versions", params={"ids": json.dumps(latest_version_ids)})
+                if not isinstance(versions_payload, list):
+                    raise ProviderError(f"{self.name}: unexpected version response shape")
+                for version_payload in versions_payload:
+                    if not isinstance(version_payload, dict):
+                        continue
+                    version_id = version_payload.get("id")
+                    project_id = version_payload.get("project_id")
+                    if version_id is None or project_id is None:
+                        continue
+                    latest_version = self._build_latest_version(
+                        ModID(provider=Provider.MODRINTH, id=str(project_id)),
+                        version_payload,
+                    )
+                    if latest_version is not None:
+                        latest_versions_by_id[str(version_id)] = latest_version
+            except ModMuxError as exc:
+                log.debug("Failed to fetch Modrinth versions: %s", exc)
+
         mods: list[Mod] = []
         for requested in requests:
             payload = payload_by_request.get(str(requested.id))
@@ -291,5 +433,11 @@ class ModrinthClient(ProviderClient):
                 str(requested.id),
                 self._author_from_members(str(fallback_team_id) if fallback_team_id is not None else None, None),
             )
-            mods.append(self._build_mod(requested, payload, author))
+            raw_versions = payload.get("versions")
+            latest_version = None
+            if isinstance(raw_versions, list) and raw_versions:
+                latest_version_id = raw_versions[0]
+                if latest_version_id is not None:
+                    latest_version = latest_versions_by_id.get(str(latest_version_id))
+            mods.append(self._build_mod(requested, payload, author, latest_version))
         return mods

@@ -10,11 +10,70 @@ import httpx
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from modmux.cache import ModioLookupCache
-from modmux.models import ModID, Provider
+from modmux.models import DependencyRelation, ModID, Provider
 from modmux.providers.modio import ModioClient, ModioCreds
 
 
 class TestModioClient(unittest.IsolatedAsyncioTestCase):
+    async def test_get_mod_populates_latest_version_and_dependencies(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            path = urlsplit(str(request.url)).path
+            if path.endswith("/games/456/mods") and request.url.params.get("id-in") == "123":
+                return httpx.Response(
+                    200,
+                    json={
+                        "data": [
+                            {
+                                "id": 123,
+                                "game_id": 456,
+                                "name": "Base Name",
+                                "description": "Base Desc",
+                                "dependencies": True,
+                                "modfile": {
+                                    "id": 999,
+                                    "filename": "base-name.zip",
+                                    "filesize": 2048,
+                                    "version": "1.2.3",
+                                    "changelog": "Fixed things",
+                                    "date_added": 1700000000,
+                                },
+                                "submitted_by": {"id": 123, "username": "user-123"},
+                            }
+                        ]
+                    },
+                    request=request,
+                )
+            if path.endswith("/games/456/mods/123/dependencies"):
+                return httpx.Response(
+                    200,
+                    json={
+                        "data": [
+                            {"id": 77, "game_id": 456, "name": "Dep One"},
+                            {"id": 88, "game_id": 456, "name": "Dep Two"},
+                        ]
+                    },
+                    request=request,
+                )
+            return httpx.Response(404, request=request)
+
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as http:
+            creds = ModioCreds.model_validate({"token": "key", "user": "user123"})
+            client = ModioClient(creds, http=http)
+            mod = await client.get_mod(ModID(provider=Provider.MODIO, id="123", game="456"))
+
+        self.assertEqual(mod.latest_version_id, "999")
+        self.assertIsNotNone(mod.latest_version)
+        assert mod.latest_version is not None
+        self.assertEqual(mod.latest_version.version, "1.2.3")
+        self.assertEqual(mod.latest_version.files[0].filename, "base-name.zip")
+        self.assertEqual(mod.latest_version.files[0].size_bytes, 2048)
+        self.assertEqual([dependency.id.id for dependency in mod.latest_version.dependencies], ["77", "88"])
+        self.assertEqual(
+            [dependency.relation for dependency in mod.latest_version.dependencies],
+            [DependencyRelation.REQUIRED, DependencyRelation.REQUIRED],
+        )
+
     async def test_get_mod_populates_translations(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
             path = urlsplit(str(request.url)).path

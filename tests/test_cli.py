@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import runpy
 import sys
@@ -120,8 +121,8 @@ class TestCli(unittest.IsolatedAsyncioTestCase):
             ],
         )
         self.assertEqual(
-            output.getvalue(),
-            '[\n  {\n    "name": "STEAM:123"\n  },\n  {\n    "name": "STEAM:456"\n  }\n]\n',
+            json.loads(output.getvalue()),
+            [{"name": "STEAM:123"}, {"name": "STEAM:456"}],
         )
 
     async def test_run_from_urls_groups_by_provider_and_preserves_order(self) -> None:
@@ -160,8 +161,8 @@ class TestCli(unittest.IsolatedAsyncioTestCase):
             (Provider.STEAM, [ModID(provider=Provider.STEAM, id="12345", game="480")]),
         )
         self.assertEqual(
-            output.getvalue(),
-            '[\n  {\n    "name": "MODRINTH:fabric-api"\n  },\n  {\n    "name": "STEAM:12345"\n  }\n]\n',
+            json.loads(output.getvalue()),
+            [{"name": "MODRINTH:fabric-api"}, {"name": "STEAM:12345"}],
         )
 
     async def test_run_from_urls_builds_provider_specific_creds(self) -> None:

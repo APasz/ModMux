@@ -4,6 +4,7 @@ from .client import Muxer, modmux_client
 from .models import (
     Author,
     Dependency,
+    DependencyRelation,
     FileAsset,
     LocaleTag,
     LocalisedText,
@@ -34,6 +35,7 @@ __all__ = [
     "ColourValue",
     "CurseforgeCreds",
     "Dependency",
+    "DependencyRelation",
     "FileAsset",
     "LocaleTag",
     "LocalisedText",

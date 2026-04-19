@@ -19,6 +19,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+## 0.4.0
+
+### Added
+- Add `Mod.latest_version`, `ModVersion`, `FileAsset`, and richer dependency metadata via `DependencyRelation`.
+- Populate latest-version metadata for CurseForge, Modrinth, mod.io, and Factorio Mods (Wube).
+- Add provider-specific dependency extraction for CurseForge, Modrinth, mod.io, and Factorio Mods (Wube).
+- Add support for resolving CurseForge game slugs from CurseForge URLs during slug lookups.
+
+### Changed
+- Improve Wube latest-release selection so the newest release metadata is chosen consistently.
+- Improve CurseForge latest-file selection to prefer the newest dated file.
+
+### Fixed
+- Fix Modrinth latest-version fallback so dependency `version_id` values do not overwrite the release version identifier.
+
 ## 0.3.0
 
 ### Added

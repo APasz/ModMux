@@ -174,7 +174,7 @@ Output is a JSON serialisation of a single `Mod` when one id is provided, or a J
 When using `--from-urls`, provide one mod URL per line. Blank lines and lines starting with `#` are ignored. URLs are grouped by provider internally so the CLI can reuse native bulk lookups where available.
 
 ## Provider notes
-- CurseForge: slug lookups require `ModID.game` (game id).
+- CurseForge: slug lookups require `ModID.game` (numeric game id or game slug from a CurseForge URL).
 - Nexus Mods: requires `ModID.game` (game domain, e.g. `skyrim`).
 - mod.io: requires `ModID.game` plus a user id (use `--user` or `MODMUX_MODIO_USER`).
 - Steam: uses a Workshop published file id; `ModID.game` is optional.

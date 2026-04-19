@@ -9,7 +9,7 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from modmux.models import ModID, Provider
+from modmux.models import DependencyRelation, ModID, Provider
 from modmux.modmux_errors import NotFound
 from modmux.providers.modrinth import ModrinthClient
 from modmux.toggles import ToggleMode
@@ -18,6 +18,7 @@ from modmux.toggles import ToggleMode
 class TestModrinthClient(unittest.IsolatedAsyncioTestCase):
     async def test_get_mod_maps_fields(self) -> None:
         project_id = "proj-123"
+        latest_version_id = "ver-123"
 
         def handler(request: httpx.Request) -> httpx.Response:
             path = urlsplit(str(request.url)).path
@@ -35,8 +36,49 @@ class TestModrinthClient(unittest.IsolatedAsyncioTestCase):
                             "team": "team-1",
                             "published": "2023-01-01T00:00:00Z",
                             "updated": "2023-01-02T00:00:00Z",
-                            "versions": ["v1"],
+                            "versions": [latest_version_id],
                             "categories": ["utility", {"name": "library"}],
+                        }
+                    ],
+                    request=request,
+                )
+            if path.endswith("/versions"):
+                self.assertEqual(params.get("ids"), [f'["{latest_version_id}"]'])
+                return httpx.Response(
+                    200,
+                    json=[
+                        {
+                            "id": latest_version_id,
+                            "project_id": project_id,
+                            "name": "Fabric API 1.0.0",
+                            "version_number": "1.0.0",
+                            "changelog": "Updated internals",
+                            "date_published": "2023-01-03T00:00:00Z",
+                            "game_versions": ["1.20.1"],
+                            "loaders": ["fabric"],
+                            "files": [
+                                {
+                                    "url": "https://cdn.modrinth.com/data/proj-123/versions/ver-123/fabric-api.jar",
+                                    "filename": "fabric-api.jar",
+                                    "size": 12345,
+                                }
+                            ],
+                            "dependencies": [
+                                {
+                                    "project_id": "dep-1",
+                                    "version_id": "dep-ver-1",
+                                    "dependency_type": "required",
+                                },
+                                {
+                                    "project_id": "dep-2",
+                                    "dependency_type": "embedded",
+                                },
+                                {
+                                    "version_id": "external-ver",
+                                    "file_name": "external.jar",
+                                    "dependency_type": "optional",
+                                },
+                            ],
                         }
                     ],
                     request=request,
@@ -63,8 +105,25 @@ class TestModrinthClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mod.author.name, "AuthorOne")
         self.assertEqual(mod.author.raw.get("role"), "admin")
         self.assertEqual(mod.tags, ["utility", "library"])
-        self.assertEqual(mod.latest_version_id, "v1")
+        self.assertEqual(mod.latest_version_id, latest_version_id)
         self.assertEqual(str(mod.homepage), "https://modrinth.com/mod/fabric-api")
+        assert mod.latest_version is not None
+        self.assertEqual(mod.latest_version.version, "1.0.0")
+        self.assertEqual(mod.latest_version.loaders, ["fabric"])
+        self.assertEqual(mod.latest_version.game_versions, ["1.20.1"])
+        self.assertEqual(len(mod.latest_version.files), 1)
+        self.assertEqual(mod.latest_version.files[0].filename, "fabric-api.jar")
+        dependency_summary = [
+            (dependency.id.id, dependency.version_req, dependency.relation)
+            for dependency in mod.latest_version.dependencies
+        ]
+        self.assertEqual(
+            dependency_summary,
+            [
+                ("dep-1", "dep-ver-1", DependencyRelation.REQUIRED),
+                ("dep-2", None, DependencyRelation.EMBEDDED),
+            ],
+        )
 
     async def test_get_mod_skips_member_lookup_by_default(self) -> None:
         project_id = "proj-123"
@@ -104,6 +163,7 @@ class TestModrinthClient(unittest.IsolatedAsyncioTestCase):
 
     async def test_get_mods_batches_projects_and_team_members(self) -> None:
         calls: dict[str, int] = {"projects": 0, "teams": 0}
+        latest_version_id = "ver-123"
 
         def handler(request: httpx.Request) -> httpx.Response:
             path = urlsplit(str(request.url)).path
@@ -119,8 +179,23 @@ class TestModrinthClient(unittest.IsolatedAsyncioTestCase):
                             "slug": "fabric-api",
                             "title": "Fabric API",
                             "team": "team-1",
-                            "versions": ["v1"],
+                            "versions": [latest_version_id],
                         },
+                    ],
+                    request=request,
+                )
+            if path.endswith("/versions"):
+                self.assertEqual(params.get("ids"), [f'["{latest_version_id}"]'])
+                return httpx.Response(
+                    200,
+                    json=[
+                        {
+                            "id": latest_version_id,
+                            "project_id": "proj-123",
+                            "version_number": "1.0.0",
+                            "files": [],
+                            "dependencies": [],
+                        }
                     ],
                     request=request,
                 )
@@ -148,7 +223,8 @@ class TestModrinthClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls, {"projects": 1, "teams": 1})
         self.assertEqual([mod.id.id for mod in mods], ["proj-123", "proj-123"])
         self.assertEqual([mod.author.name for mod in mods], ["AuthorOne", "AuthorOne"])
-        self.assertEqual([mod.latest_version_id for mod in mods], ["v1", "v1"])
+        self.assertEqual([mod.latest_version_id for mod in mods], [latest_version_id, latest_version_id])
+        self.assertTrue(all(mod.latest_version is not None for mod in mods))
 
     async def test_get_mod_raises_not_found_when_batch_response_omits_project(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:

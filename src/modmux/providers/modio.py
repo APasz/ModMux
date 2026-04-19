@@ -1,5 +1,6 @@
 """mod.io provider integration."""
 
+import asyncio
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import cast
@@ -10,7 +11,19 @@ from pydantic import AliasChoices, AnyHttpUrl, Field, SecretStr
 
 from .._log import get_logger
 from ..cache import ModioLookupCache
-from ..models import Author, LocaleTag, LocalisedText, Mod, ModID, Provider, ProviderCreds
+from ..models import (
+    Author,
+    Dependency,
+    DependencyRelation,
+    FileAsset,
+    LocaleTag,
+    LocalisedText,
+    Mod,
+    ModID,
+    ModVersion,
+    Provider,
+    ProviderCreds,
+)
 from ..modmux_errors import ModMuxError, NotFound, ProviderError
 from ..toggles import ToggleMode, UndefinedType
 from ..utils.discovery import register
@@ -245,6 +258,57 @@ class ModioClient(ProviderClient):
         await self.cache.mod_slug_to_id.set(_mod_cache_key(game_id, slug), mod_value)
         await self.cache.mod_id_to_slug.set(_mod_cache_key(game_id, mod_value), slug)
 
+    async def _fetch_dependencies(self, game_id: str, mod_value: str) -> list[Dependency]:
+        data = await self._get_json(f"games/{game_id}/mods/{mod_value}/dependencies")
+        dependencies: list[Dependency] = []
+        for payload in _extract_items(data):
+            dependency_mod_id = payload.get("id")
+            if dependency_mod_id is None:
+                continue
+            dependencies.append(
+                Dependency(
+                    provider=Provider.MODIO,
+                    id=ModID(provider=Provider.MODIO, id=str(dependency_mod_id), game=game_id),
+                    relation=DependencyRelation.REQUIRED,
+                )
+            )
+        return dependencies
+
+    def _build_latest_version(
+        self,
+        mod_key: ModID,
+        modfile: object,
+        dependencies: Sequence[Dependency],
+    ) -> ModVersion | None:
+        if not isinstance(modfile, dict):
+            return None
+        modfile_id = modfile.get("id")
+        if modfile_id is None:
+            return None
+
+        filename = modfile.get("filename")
+        filesize = modfile.get("filesize")
+        files: list[FileAsset] = []
+        if isinstance(filename, str):
+            files.append(
+                FileAsset(
+                    file_id=str(modfile_id),
+                    filename=filename,
+                    size_bytes=filesize if isinstance(filesize, int) else None,
+                )
+            )
+
+        return ModVersion(
+            id=mod_key,
+            name=str(_coalesce(modfile.get("filename"), modfile.get("version"), modfile_id)),
+            version=str(_coalesce(modfile.get("version"), modfile_id)),
+            changelog_md=str(modfile.get("changelog")) if modfile.get("changelog") is not None else None,
+            published_at=_parse_timestamp(_coalesce(modfile.get("date_added"), modfile.get("date_updated"))),
+            files=files,
+            dependencies=list(dependencies),
+            raw=dict(modfile),
+        )
+
     def _build_mod(
         self,
         requested: ModID,
@@ -254,6 +318,7 @@ class ModioClient(ProviderClient):
         payload: Mapping[str, object],
         name_translations: dict[LocaleTag, str],
         description_translations: dict[LocaleTag, str],
+        dependencies: Sequence[Dependency],
     ) -> Mod:
         name = _coalesce(payload.get("name"), payload.get("mod_name"), requested.id)
         slug = _coalesce(payload.get("name_id"), payload.get("slug"))
@@ -300,6 +365,7 @@ class ModioClient(ProviderClient):
             game=str(resolved_game_id),
         )
         author = Author(provider=Provider.MODIO, id=str(author_id), name=str(author_name), raw=dict(submitted_by))
+        latest_version = self._build_latest_version(mod_key, modfile, dependencies)
 
         return Mod(
             provider=Provider.MODIO,
@@ -313,6 +379,7 @@ class ModioClient(ProviderClient):
             created_at=created_at,
             updated_at=updated_at,
             latest_version_id=latest_version_id,
+            latest_version=latest_version,
             raw=dict(payload),
         )
 
@@ -374,6 +441,24 @@ class ModioClient(ProviderClient):
             for payload in payloads.values():
                 await self._update_cache_from_payload(game_id, payload)
 
+        dependency_tasks: dict[tuple[str, str], asyncio.Task[list[Dependency]]] = {}
+        for game_id, game_payloads in payloads_by_game.items():
+            for mod_value, payload in game_payloads.items():
+                if payload.get("dependencies") is True:
+                    dependency_tasks[(game_id, mod_value)] = asyncio.create_task(
+                        self._fetch_dependencies(game_id, mod_value)
+                    )
+
+        dependencies_by_mod: dict[tuple[str, str], list[Dependency]] = {}
+        if dependency_tasks:
+            dependency_results = await asyncio.gather(*dependency_tasks.values(), return_exceptions=True)
+            for key, result in zip(dependency_tasks, dependency_results, strict=False):
+                if isinstance(result, BaseException):
+                    log.debug("mod.io dependency fetch failed for %s:%s: %s", key[0], key[1], result)
+                    dependencies_by_mod[key] = []
+                    continue
+                dependencies_by_mod[key] = result
+
         name_translations: dict[tuple[str, str], dict[LocaleTag, str]] = {}
         description_translations: dict[tuple[str, str], dict[LocaleTag, str]] = {}
         locale_tags = _normalise_locales(locales)
@@ -411,6 +496,7 @@ class ModioClient(ProviderClient):
                     payload=payload,
                     name_translations=name_translations.get((game_id, mod_value), {}),
                     description_translations=description_translations.get((game_id, mod_value), {}),
+                    dependencies=dependencies_by_mod.get((game_id, mod_value), []),
                 )
             )
 

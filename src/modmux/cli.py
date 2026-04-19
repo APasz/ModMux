@@ -210,12 +210,12 @@ async def _run(argv: list[str] | None = None) -> int:
         elif len(mod_ids) == 1:
             assert provider is not None
             mod = await cli.get_mod(provider, mod_ids[0])
-            print(mod.model_dump_json(indent=2 if args.pretty else None))
+            print(mod.model_dump_json(indent=4 if args.pretty else None))
             return 0
         else:
             assert provider is not None
             mods = await cli.get_mods(provider, mod_ids)
-    print(json.dumps([mod.model_dump(mode="json") for mod in mods], indent=2 if args.pretty else None))
+    print(json.dumps([mod.model_dump(mode="json") for mod in mods], indent=4 if args.pretty else None))
     return 0
 
 

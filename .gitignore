@@ -5,3 +5,4 @@ dist/*
 .co*
 urls.txt
 .env
+out.json
