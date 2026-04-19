@@ -10,9 +10,10 @@ Unified async client for multiple game mod platforms. ModMux normalises provider
 ## Features
 - Async HTTP client with rate limiting and retry handling
 - Normalised `Mod` metadata model across providers
+- Bulk `get_mods(...)` support with native batching where available
 - Pluggable provider registry
 - URL parsing helpers for provider links
-- CLI for fetching a single mod and printing JSON
+- CLI for fetching one or more mods and printing JSON
 
 ## Supported providers
 - Modrinth
@@ -109,6 +110,20 @@ async with Muxer(creds={Provider.MODRINTH: {"token": "token"}}) as mux:
     mod = await mux.get_mod(Provider.MODRINTH, mod_id)
 ```
 
+You can also fetch multiple mods in one call:
+
+```python
+from modmux import ModID, Muxer, Provider
+
+mod_ids = [
+    ModID(provider=Provider.STEAM, id="123"),
+    ModID(provider=Provider.STEAM, id="456"),
+]
+
+async with Muxer() as mux:
+    mods = await mux.get_mods(Provider.STEAM, mod_ids)
+```
+
 ## URL parsing
 Parse provider URLs into `ModID` instances, or fetch directly from a URL.
 
@@ -137,13 +152,15 @@ Some providers require extra context (game ids or credentials); use
 `get_mod_from_url(..., game="...")` when the URL cannot supply it.
 
 ## CLI usage
-The CLI expects a provider name and provider-specific mod id. Provider names are case-insensitive.
+The CLI expects a provider name and one or more provider-specific mod ids. Provider names are case-insensitive.
 
 ```bash
 modmux MODRINTH fabric-api --pretty
 modmux CURSEFORGE 238222 --pretty
+modmux STEAM 123 456 --pretty
 modmux NEXUSMODS 12345 --game transportfever2
 modmux MODIO some-mod --game 4321 --user 12345 --token <api-key>
+modmux --from-urls urls.txt --pretty
 ```
 
 Or without installing a script:
@@ -152,7 +169,9 @@ Or without installing a script:
 python -m modmux MODRINTH fabric-api --pretty
 ```
 
-Output is a JSON serialisation of the `Mod` model.
+Output is a JSON serialisation of a single `Mod` when one id is provided, or a JSON array of `Mod` objects when multiple ids are provided.
+
+When using `--from-urls`, provide one mod URL per line. Blank lines and lines starting with `#` are ignored. URLs are grouped by provider internally so the CLI can reuse native bulk lookups where available.
 
 ## Provider notes
 - CurseForge: slug lookups require `ModID.game` (game id).
@@ -160,3 +179,4 @@ Output is a JSON serialisation of the `Mod` model.
 - mod.io: requires `ModID.game` plus a user id (use `--user` or `MODMUX_MODIO_USER`).
 - Steam: uses a Workshop published file id; `ModID.game` is optional.
 - Wube: uses the Factorio mod name slug.
+- Native bulk lookup is currently implemented for Modrinth, CurseForge, Steam Workshop, and mod.io.

@@ -1,6 +1,8 @@
 """Modrinth provider integration."""
 
-from datetime import datetime, timezone
+import json
+from collections.abc import Sequence
+from datetime import UTC, datetime
 from typing import cast
 from urllib.parse import urlsplit
 
@@ -9,7 +11,7 @@ from pydantic import AliasChoices, AnyHttpUrl, Field, SecretStr
 
 from .._log import get_logger
 from ..models import Author, LocaleTag, LocalisedText, Mod, ModID, Provider, ProviderCreds
-from ..modmux_errors import ModMuxError, ProviderError
+from ..modmux_errors import ModMuxError, NotFound, ProviderError
 from ..toggles import ToggleMode, UndefinedType, resolve_toggle
 from ..utils.discovery import register
 from ._base import ProviderClient
@@ -44,7 +46,7 @@ def _parse_timestamp(value: object | None) -> datetime | None:
     if value is None:
         return None
     if isinstance(value, (int, float)):
-        return datetime.fromtimestamp(value, tz=timezone.utc)
+        return datetime.fromtimestamp(value, tz=UTC)
     if isinstance(value, str):
         cleaned = value.replace("Z", "+00:00") if value.endswith("Z") else value
         try:
@@ -104,13 +106,7 @@ class ModrinthClient(ProviderClient):
             return None
         return ModID(provider=Provider.MODRINTH, id=segments[1])
 
-    async def _fetch_author(self, project_id: str, team_id: str | None) -> Author:
-        try:
-            members = await self._get_json(f"project/{project_id}/members")
-        except ModMuxError as exc:
-            log.debug("Failed to fetch Modrinth members: %s", exc)
-            members = None
-
+    def _author_from_members(self, team_id: str | None, members: object) -> Author:
         if isinstance(members, list):
             preferred = ["owner", "admin"]
             chosen = None
@@ -144,40 +140,18 @@ class ModrinthClient(ProviderClient):
             fallback_raw = {"team_id": team_id}
         return Author(provider=Provider.MODRINTH, id=str(fallback_id), name=str(fallback_id), raw=fallback_raw)
 
-    async def get_mod(
-        self,
-        mod_id: ModID,
-        *,
-        locales: list[LocaleTag] | None = None,
-        author_resolution: ToggleMode | bool | UndefinedType = ToggleMode.AUTO,
-    ) -> Mod:
-        """Fetch a single mod from Modrinth.
+    async def _fetch_author(self, project_id: str, team_id: str | None) -> Author:
+        try:
+            members = await self._get_json(f"project/{project_id}/members")
+        except ModMuxError as exc:
+            log.debug("Failed to fetch Modrinth members: %s", exc)
+            members = None
+        return self._author_from_members(team_id, members)
 
-        Args;
-            mod_id: Provider-specific mod identifier.
-            locales: Optional locale tags to request translations for.
-            author_resolution: Generic tri-state author enrichment toggle.
-
-        Returns;
-            A normalised Mod instance.
-        """
-        payload = await self._get_json(f"project/{mod_id.id}")
-        if not isinstance(payload, dict):
-            raise ProviderError(f"{self.name}: unexpected response shape")
-
-        project_id = str(_coalesce(payload.get("id"), mod_id.id))
-        team_id = _coalesce(payload.get("team"), payload.get("team_id"))
-        fallback_author_id = str(team_id) if team_id is not None else "unknown"
-        author_raw: dict[str, object] = {}
-        if team_id is not None:
-            author_raw = {"team_id": str(team_id)}
-        author = Author(provider=Provider.MODRINTH, id=fallback_author_id, name=fallback_author_id, raw=author_raw)
-        should_enrich_author = resolve_toggle(author_resolution, default=False)
-        if should_enrich_author:
-            author = await self._fetch_author(project_id, str(team_id) if team_id is not None else None)
-
+    def _build_mod(self, requested: ModID, payload: dict[str, object], author: Author) -> Mod:
+        project_id = str(_coalesce(payload.get("id"), requested.id))
         slug = _coalesce(payload.get("slug"), payload.get("id"))
-        name = _coalesce(payload.get("title"), payload.get("name"), payload.get("slug"), mod_id.id)
+        name = _coalesce(payload.get("title"), payload.get("name"), payload.get("slug"), requested.id)
         description = _coalesce(payload.get("body"), payload.get("description"), payload.get("summary"))
         if description is not None:
             description = str(description)
@@ -219,3 +193,103 @@ class ModrinthClient(ProviderClient):
             latest_version_id=latest_version_id,
             raw=payload,
         )
+
+    async def get_mod(
+        self,
+        mod_id: ModID,
+        *,
+        locales: list[LocaleTag] | None = None,
+        author_resolution: ToggleMode | bool | UndefinedType = ToggleMode.AUTO,
+    ) -> Mod:
+        """Fetch a single mod from Modrinth.
+
+        Args;
+            mod_id: Provider-specific mod identifier.
+            locales: Optional locale tags to request translations for.
+            author_resolution: Generic tri-state author enrichment toggle.
+
+        Returns;
+            A normalised Mod instance.
+        """
+        mods = await self.get_mods([mod_id], locales=locales, author_resolution=author_resolution)
+        return mods[0]
+
+    async def get_mods(
+        self,
+        mod_ids: Sequence[ModID],
+        *,
+        locales: list[LocaleTag] | None = None,
+        author_resolution: ToggleMode | bool | UndefinedType = ToggleMode.AUTO,
+    ) -> list[Mod]:
+        """Fetch multiple mods from Modrinth."""
+        del locales
+
+        requests = list(mod_ids)
+        if not requests:
+            return []
+
+        requested_ids = [str(mod_id.id) for mod_id in requests]
+        payloads = await self._get_json("projects", params={"ids": json.dumps(requested_ids)})
+        if not isinstance(payloads, list):
+            raise ProviderError(f"{self.name}: unexpected response shape")
+
+        payload_by_request: dict[str, dict[str, object]] = {}
+        for payload in payloads:
+            if not isinstance(payload, dict):
+                continue
+            project_id = _coalesce(payload.get("id"))
+            slug = _coalesce(payload.get("slug"))
+            if project_id is not None and str(project_id) in requested_ids:
+                payload_by_request[str(project_id)] = payload
+            if slug is not None and str(slug) in requested_ids:
+                payload_by_request[str(slug)] = payload
+
+        authors_by_request: dict[str, Author] = {}
+        should_enrich_author = resolve_toggle(author_resolution, default=False)
+        if should_enrich_author:
+            team_ids: list[str] = []
+            for requested in requests:
+                payload = payload_by_request.get(str(requested.id))
+                if not isinstance(payload, dict):
+                    continue
+                team_id = _coalesce(payload.get("team"), payload.get("team_id"))
+                if team_id is not None:
+                    team_value = str(team_id)
+                    if team_value not in team_ids:
+                        team_ids.append(team_value)
+
+            if team_ids:
+                try:
+                    members_payload = await self._get_json("teams", params={"ids": json.dumps(team_ids)})
+                    if not isinstance(members_payload, list):
+                        raise ProviderError(f"{self.name}: unexpected team response shape")
+                    authors_by_team = {
+                        team_id: self._author_from_members(team_id, members)
+                        for team_id, members in zip(team_ids, members_payload, strict=False)
+                    }
+                except ModMuxError as exc:
+                    log.debug("Failed to fetch Modrinth team members: %s", exc)
+                    authors_by_team = {}
+
+                for requested in requests:
+                    payload = payload_by_request.get(str(requested.id))
+                    if not isinstance(payload, dict):
+                        continue
+                    team_id = _coalesce(payload.get("team"), payload.get("team_id"))
+                    if team_id is not None:
+                        author = authors_by_team.get(str(team_id))
+                        if author is not None:
+                            authors_by_request[str(requested.id)] = author
+
+        mods: list[Mod] = []
+        for requested in requests:
+            payload = payload_by_request.get(str(requested.id))
+            if not isinstance(payload, dict):
+                raise NotFound(f"{self.name}: mod {requested.id!r} not found")
+            fallback_team_id = _coalesce(payload.get("team"), payload.get("team_id"))
+            author = authors_by_request.get(
+                str(requested.id),
+                self._author_from_members(str(fallback_team_id) if fallback_team_id is not None else None, None),
+            )
+            mods.append(self._build_mod(requested, payload, author))
+        return mods

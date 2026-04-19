@@ -5,15 +5,12 @@ from __future__ import annotations
 import importlib
 import pkgutil
 from types import ModuleType
-from typing import TypeVar
 
 from .._log import get_logger
 from ..models import Provider
 from ..providers._base import ProviderClient
 
 log = get_logger(__name__)
-
-T = TypeVar("T", bound=ProviderClient)
 
 REGISTRY: dict[Provider, type[ProviderClient]] = {}
 
@@ -41,7 +38,7 @@ def load_providers(pkg: ModuleType) -> list[ModuleType]:
     return modules
 
 
-def register(cls: type[T], *, key: Provider | None = None) -> type[T]:
+def register[T: ProviderClient](cls: type[T], *, key: Provider | None = None) -> type[T]:
     """Register a provider client class under its Provider enum.
 
     Args;

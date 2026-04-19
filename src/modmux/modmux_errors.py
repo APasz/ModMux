@@ -19,3 +19,7 @@ class RateLimited(ModMuxError):
 
 class ProviderError(ModMuxError):
     """Raised for provider-specific failures."""
+
+
+class BatchResponseError(ProviderError):
+    """Raised when a provider bulk response cannot be matched to the requested items."""

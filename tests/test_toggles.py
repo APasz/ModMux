@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-import unittest
 import sys
+import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from modmux import toggles
-from modmux.toggles import ToggleMode, UNDEFINED, coerce_toggle_mode, resolve_toggle
+from modmux.toggles import UNDEFINED, ToggleMode, coerce_toggle_mode, resolve_toggle
 
 
 class TestToggleHelpers(unittest.TestCase):

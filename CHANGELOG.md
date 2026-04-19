@@ -19,6 +19,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+## 0.3.0
+
+### Added
+- Add bulk mod lookup via `Muxer.get_mods(...)` and `ProviderClient.get_mods(...)`.
+- Add native bulk fetching for Steam Workshop, mod.io, Modrinth, and CurseForge.
+- Add CLI support for fetching multiple mod ids in one invocation.
+- Add CLI `--from-urls` mode for reading mod URLs from a file and resolving them in bulk.
+- Add `BatchResponseError` for malformed or incomplete bulk provider responses.
+- Add development tooling and configuration for `basedpyright`, `coverage`, `pytest`, `pytest-cov`, and `ruff`.
+
+### Changed
+- Reuse native bulk paths from provider `get_mod(...)` implementations where available.
+- Improve CLI credential loading so `.env` can be resolved from the current working directory, repo root, or URL file directory.
+- Expand test coverage across CLI flows, batch provider paths, and retry/error branches.
+
 ## 0.2.6
 
 ### Added

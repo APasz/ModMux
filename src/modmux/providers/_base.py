@@ -3,7 +3,7 @@
 import abc
 import asyncio
 import random
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import httpx
@@ -59,6 +59,35 @@ class ProviderClient(abc.ABC):
             A normalised Mod instance.
         """
         ...
+
+    async def get_mods(
+        self,
+        mod_ids: Sequence[ModID],
+        *,
+        locales: list[LocaleTag] | None = None,
+        author_resolution: ToggleMode | bool | UndefinedType = ToggleMode.AUTO,
+    ) -> list[Mod]:
+        """Fetch multiple mods by provider-specific identifiers.
+
+        The default implementation fans out to `get_mod()` and preserves the
+        input order. Providers with native bulk endpoints should override this.
+
+        Args;
+            mod_ids: Provider-scoped mod identifiers.
+            locales: Optional locale tags to request translations for.
+            author_resolution: Author enrichment toggle.
+
+        Returns;
+            A list of normalised Mod instances in input order.
+        """
+        if not mod_ids:
+            return []
+        return await asyncio.gather(
+            *(
+                self.get_mod(mod_id, locales=locales, author_resolution=author_resolution)
+                for mod_id in mod_ids
+            )
+        )
 
     async def get_user(self, user_id: str) -> Author:
         """Fetch a provider user by id.

@@ -14,6 +14,7 @@ from .models import (
     Provider,
     ProviderCreds,
 )
+from .modmux_errors import AuthError, BatchResponseError, ModMuxError, NotFound, ProviderError, RateLimited
 from .providers._base import ProviderClient
 from .providers.colour import Colour, ColourValue
 from .providers.curseforge import CurseforgeCreds
@@ -26,7 +27,9 @@ from .toggles import ToggleMode
 from .utils.urls import parse_url
 
 __all__ = [
+    "AuthError",
     "Author",
+    "BatchResponseError",
     "Colour",
     "ColourValue",
     "CurseforgeCreds",
@@ -36,15 +39,19 @@ __all__ = [
     "LocalisedText",
     "Mod",
     "ModID",
+    "ModMuxError",
     "ModSummary",
     "ModVersion",
     "ModioCreds",
     "ModrinthCreds",
     "Muxer",
     "NexusCreds",
+    "NotFound",
     "Provider",
     "ProviderClient",
     "ProviderCreds",
+    "ProviderError",
+    "RateLimited",
     "SteamCreds",
     "ToggleMode",
     "modmux_client",

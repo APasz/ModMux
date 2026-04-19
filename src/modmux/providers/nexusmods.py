@@ -1,6 +1,6 @@
 """Nexus Mods provider integration."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import cast
 from urllib.parse import urlsplit
 
@@ -41,7 +41,7 @@ def _parse_timestamp(value: object | None) -> datetime | None:
     if value is None:
         return None
     if isinstance(value, (int, float)):
-        return datetime.fromtimestamp(value, tz=timezone.utc)
+        return datetime.fromtimestamp(value, tz=UTC)
     if isinstance(value, str):
         try:
             return datetime.fromisoformat(value)

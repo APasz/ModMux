@@ -1,0 +1,27 @@
+{
+    "include": [
+        "src",
+        "tests"
+    ],
+    "venvPath": ".",
+    "venv": ".venv",
+    "typeCheckingMode": "standard",
+    "reportImportCycles": "none",
+    "reportAny": "none",
+    "reportExplicitAny": "none",
+    "reportUnknownParameterType": "none",
+    "reportUnknownArgumentType": "none",
+    "reportUnknownMemberType": "none",
+    "reportUnknownLambdaType": "none",
+    "reportUnknownVariableType": "none",
+    "reportMissingTypeArgument": "none",
+    "reportUnannotatedClassAttribute": "none",
+    "reportUntypedBaseClass": "none",
+    "reportUnusedCallResult": "none",
+    "reportPrivateUsage": "none",
+    "reportPrivateLocalImportUsage": "none",
+    "reportImplicitOverride": "none",
+    "reportDeprecated": "none",
+    "reportUnnecessaryIsInstance": "none",
+    "reportImplicitStringConcatenation": "none"
+}

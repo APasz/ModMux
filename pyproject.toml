@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "modmux"
-version = "0.2.6"
+version = "0.3.0"
 description = "Single interface for several game mod portals"
 readme = "README.md"
 requires-python = ">= 3.13"
@@ -16,6 +16,15 @@ dependencies = [
     "pydantic>=2,<3",
     "httpx>=0.28,<1",
     "aiolimiter>=1.2,<2"
+]
+
+[dependency-groups]
+dev = [
+    "basedpyright",
+    "coverage",
+    "pytest",
+    "pytest-cov",
+    "ruff",
 ]
 
 [project.scripts]
@@ -31,6 +40,23 @@ include = ["src/modmux", "README.md", "LICENSE", "pyproject.toml"]
 line-length = 120
 target-version = "py313"
 
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=modmux --cov-report=term-missing"
+
+[tool.coverage.run]
+source = ["src/modmux"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+
 [tool.pyright]
 typeCheckingMode = "standard"
 include = ["."]
+venvPath = "."
+venv = ".venv"

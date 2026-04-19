@@ -1,21 +1,93 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 import unittest
-from urllib.parse import parse_qs
-from urllib.parse import urlsplit
+from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from modmux.models import ModID, Provider
+from modmux.modmux_errors import NotFound, ProviderError
 from modmux.providers.steam import SteamClient
 from modmux.toggles import ToggleMode
 
 
 class TestSteamClient(unittest.IsolatedAsyncioTestCase):
+    def test_parse_url(self) -> None:
+        parsed = SteamClient.parse_url("https://steamcommunity.com/sharedfiles/filedetails/?id=12345&appid=480")
+        self.assertEqual(parsed, ModID(provider=Provider.STEAM, id="12345", game="480"))
+
+        path_parsed = SteamClient.parse_url("https://steamcommunity.com/sharedfiles/filedetails/67890")
+        self.assertEqual(path_parsed, ModID(provider=Provider.STEAM, id="67890", game=None))
+
+        self.assertIsNone(SteamClient.parse_url("https://example.com/sharedfiles/filedetails/?id=1"))
+
+    async def test_get_mods_batches_details_translations_and_authors(self) -> None:
+        calls: dict[str, int] = {"details": 0, "users": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            path = urlsplit(str(request.url)).path
+            if path.endswith("/ISteamRemoteStorage/GetPublishedFileDetails/v1/"):
+                calls["details"] += 1
+                params = parse_qs(request.content.decode())
+                language = params.get("language", [None])[0]
+                ids = [params[key][0] for key in sorted(params) if key.startswith("publishedfileids[")]
+                details = []
+                for mod_id in ids:
+                    title = f"Base {mod_id}"
+                    description = f"Base Desc {mod_id}"
+                    if language == "10":
+                        title = f"JP {mod_id}"
+                        description = f"JP Desc {mod_id}"
+                    details.append(
+                        {
+                            "result": 1,
+                            "publishedfileid": mod_id,
+                            "title": title,
+                            "description": description,
+                            "creator": f"user-{mod_id}",
+                        }
+                    )
+                return httpx.Response(200, json={"response": {"publishedfiledetails": details}}, request=request)
+
+            if path.endswith("/ISteamUser/GetPlayerSummaries/v2/"):
+                calls["users"] += 1
+                query = parse_qs(urlsplit(str(request.url)).query)
+                steamids = query.get("steamids", [""])[0].split(",")
+                players = [
+                    {
+                        "steamid": steam_id,
+                        "personaname": f"Name {steam_id}",
+                    }
+                    for steam_id in steamids
+                    if steam_id
+                ]
+                return httpx.Response(200, json={"response": {"players": players}}, request=request)
+
+            return httpx.Response(404, request=request)
+
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = SteamClient(None, http=http)
+            mod_ids = [
+                ModID(provider=Provider.STEAM, id="123"),
+                ModID(provider=Provider.STEAM, id="456"),
+            ]
+            mods = await client.get_mods(mod_ids, locales=["ja"], author_resolution=ToggleMode.ON)
+
+        self.assertEqual(calls["details"], 2)
+        self.assertEqual(calls["users"], 1)
+        self.assertEqual([mod.id.id for mod in mods], ["123", "456"])
+        self.assertEqual(mods[0].name.value, "Base 123")
+        self.assertEqual(mods[0].name.translations["ja"], "JP 123")
+        self.assertEqual(mods[1].name.value, "Base 456")
+        self.assertEqual(mods[1].name.translations["ja"], "JP 456")
+        self.assertEqual(mods[0].author.name, "Name user-123")
+        self.assertEqual(mods[1].author.name, "Name user-456")
+
     async def test_get_mod_populates_translations(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
             params = parse_qs(request.content.decode())
@@ -148,3 +220,105 @@ class TestSteamClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mod.author.name, "DisplayName")
         self.assertEqual(mod.author.raw.get("steamid"), "76561198000000001")
         self.assertEqual(mod.author.raw.get("personaname"), "DisplayName")
+
+    async def test_get_user_validates_and_falls_back_to_first_player(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "response": {
+                        "players": [{"steamid": "first", "personaname": "FallbackName"}],
+                    }
+                },
+                request=request,
+            )
+
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = SteamClient(None, http=http)
+            with self.assertRaises(ValueError):
+                await client.get_user(" ")
+            author = await client.get_user("missing")
+
+        self.assertEqual(author.id, "first")
+        self.assertEqual(author.name, "FallbackName")
+
+    async def test_get_mods_falls_back_when_localization_or_user_lookup_fails(self) -> None:
+        calls: dict[str, int] = {"details": 0, "users": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            path = urlsplit(str(request.url)).path
+            if path.endswith("/ISteamRemoteStorage/GetPublishedFileDetails/v1/"):
+                calls["details"] += 1
+                params = parse_qs(request.content.decode())
+                if params.get("language", [None])[0] == "10":
+                    return httpx.Response(500, request=request)
+                return httpx.Response(
+                    200,
+                    json={
+                        "response": {
+                            "publishedfiledetails": [
+                                {
+                                    "result": 1,
+                                    "publishedfileid": "123",
+                                    "title": "Base Title",
+                                    "description": "Base Desc",
+                                    "creator": "creator-1",
+                                }
+                            ]
+                        }
+                    },
+                    request=request,
+                )
+            if path.endswith("/ISteamUser/GetPlayerSummaries/v2/"):
+                calls["users"] += 1
+                return httpx.Response(500, request=request)
+            return httpx.Response(404, request=request)
+
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = SteamClient(None, http=http)
+            mods = await client.get_mods(
+                [ModID(provider=Provider.STEAM, id="123")],
+                locales=["ja", "zz"],
+                author_resolution=ToggleMode.ON,
+            )
+
+        self.assertEqual(calls["details"], 3)
+        self.assertEqual(calls["users"], 2)
+        self.assertEqual(mods[0].name.translations, {})
+        self.assertEqual(mods[0].author.id, "creator-1")
+        self.assertEqual(mods[0].author.name, "creator-1")
+
+    async def test_get_mods_raises_for_missing_or_invalid_results(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            params = parse_qs(request.content.decode())
+            mod_id = params.get("publishedfileids[0]", [""])[0]
+            result: object = 1
+            if mod_id == "missing":
+                result = 9
+            elif mod_id == "bad":
+                result = "oops"
+            return httpx.Response(
+                200,
+                json={
+                    "response": {
+                        "publishedfiledetails": [
+                            {
+                                "result": result,
+                                "publishedfileid": mod_id,
+                                "title": "Title",
+                            }
+                        ]
+                    }
+                },
+                request=request,
+            )
+
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = SteamClient(None, http=http)
+            with self.assertRaises(NotFound):
+                await client.get_mods([ModID(provider=Provider.STEAM, id="missing")])
+            with self.assertRaises(ProviderError):
+                await client.get_mods([ModID(provider=Provider.STEAM, id="bad")])

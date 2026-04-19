@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 .venv
 dist/*
+.co*
+urls.txt
+.env

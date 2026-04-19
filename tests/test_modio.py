@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 import unittest
+from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
-from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from modmux.cache import ModioLookupCache
 from modmux.models import ModID, Provider
 from modmux.providers.modio import ModioClient, ModioCreds
 
@@ -17,25 +18,31 @@ class TestModioClient(unittest.IsolatedAsyncioTestCase):
     async def test_get_mod_populates_translations(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
             path = urlsplit(str(request.url)).path
-            if path.endswith("/games/456/mods/123"):
+            if path.endswith("/games/456/mods"):
                 locale = request.headers.get("Accept-Language")
+                query = dict(request.url.params)
+                self.assertEqual(query.get("id-in"), "123")
                 if locale == "ja":
                     payload = {
-                        "data": {
-                            "id": 123,
-                            "name": "JP Name",
-                            "summary": "JP Summary",
-                            "description": "JP Desc",
-                        }
+                        "data": [
+                            {
+                                "id": 123,
+                                "name": "JP Name",
+                                "summary": "JP Summary",
+                                "description": "JP Desc",
+                            }
+                        ]
                     }
                 else:
                     payload = {
-                        "data": {
-                            "id": 123,
-                            "name": "Base Name",
-                            "summary": "Base Summary",
-                            "description": "Base Desc",
-                        }
+                        "data": [
+                            {
+                                "id": 123,
+                                "name": "Base Name",
+                                "summary": "Base Summary",
+                                "description": "Base Desc",
+                            }
+                        ]
                     }
                 return httpx.Response(200, json=payload, request=request)
             return httpx.Response(404, request=request)
@@ -52,3 +59,145 @@ class TestModioClient(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(mod.description_md)
         assert mod.description_md is not None
         self.assertEqual(mod.description_md.translations["ja"], "JP Desc")
+
+    async def test_get_mods_batches_numeric_ids_and_translations(self) -> None:
+        calls: dict[str, int] = {"mods": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            path = urlsplit(str(request.url)).path
+            if path.endswith("/games/456/mods"):
+                calls["mods"] += 1
+                locale = request.headers.get("Accept-Language")
+                requested_ids = request.url.params.get("id-in", "").split(",")
+                data = []
+                for mod_id in requested_ids:
+                    if not mod_id:
+                        continue
+                    name = f"Base {mod_id}"
+                    description = f"Base Desc {mod_id}"
+                    if locale == "ja":
+                        name = f"JP {mod_id}"
+                        description = f"JP Desc {mod_id}"
+                    data.append(
+                        {
+                            "id": int(mod_id),
+                            "game_id": 456,
+                            "name": name,
+                            "description": description,
+                            "submitted_by": {"id": int(mod_id), "username": f"user-{mod_id}"},
+                        }
+                    )
+                return httpx.Response(200, json={"data": data}, request=request)
+            return httpx.Response(404, request=request)
+
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as http:
+            creds = ModioCreds.model_validate({"token": "key", "user": "user123"})
+            client = ModioClient(creds, http=http)
+            mod_ids = [
+                ModID(provider=Provider.MODIO, id="123", game="456"),
+                ModID(provider=Provider.MODIO, id="456", game="456"),
+            ]
+            mods = await client.get_mods(mod_ids, locales=["ja"])
+
+        self.assertEqual(calls["mods"], 2)
+        self.assertEqual([mod.id.id for mod in mods], ["123", "456"])
+        self.assertEqual(mods[0].name.value, "Base 123")
+        self.assertEqual(mods[0].name.translations["ja"], "JP 123")
+        self.assertEqual(mods[1].name.value, "Base 456")
+        self.assertEqual(mods[1].name.translations["ja"], "JP 456")
+        self.assertEqual(mods[0].author.name, "user-123")
+        self.assertEqual(mods[1].author.name, "user-456")
+
+    async def test_get_mods_resolves_slug_inputs_and_uses_cache(self) -> None:
+        calls: dict[str, int] = {"games": 0, "slug": 0, "mods": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            path = urlsplit(str(request.url)).path
+            if path.endswith("/games"):
+                calls["games"] += 1
+                self.assertEqual(request.url.params.get("name_id"), "factorio")
+                return httpx.Response(200, json={"data": [{"id": 456, "name_id": "factorio"}]}, request=request)
+            if path.endswith("/games/456/mods") and request.url.params.get("name_id") == "space-exploration":
+                calls["slug"] += 1
+                return httpx.Response(
+                    200,
+                    json={"data": [{"id": 123, "name_id": "space-exploration"}]},
+                    request=request,
+                )
+            if path.endswith("/games/456/mods") and request.url.params.get("id-in") == "123":
+                calls["mods"] += 1
+                return httpx.Response(
+                    200,
+                    json={
+                        "data": [
+                            {
+                                "id": 123,
+                                "game_id": 456,
+                                "name": "Space Exploration",
+                                "name_id": "space-exploration",
+                                "submitted_by": {"id": 1, "username": "earendel"},
+                            }
+                        ]
+                    },
+                    request=request,
+                )
+            return httpx.Response(404, request=request)
+
+        cache = ModioLookupCache()
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as http:
+            creds = ModioCreds.model_validate({"token": "key", "user": "user123"})
+            client = ModioClient(creds, http=http, cache=cache)
+            mod_id = ModID(provider=Provider.MODIO, id="space-exploration", game="factorio")
+            first = await client.get_mod(mod_id)
+            second = await client.get_mod(mod_id)
+
+        self.assertEqual(calls, {"games": 1, "slug": 1, "mods": 2})
+        self.assertEqual(first.id.id, "123")
+        self.assertEqual(second.id.id, "123")
+        self.assertEqual(first.slug, "space-exploration")
+
+    async def test_get_mods_skips_failed_localization(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            path = urlsplit(str(request.url)).path
+            if path.endswith("/games/456/mods") and request.url.params.get("id-in") == "123":
+                if request.headers.get("Accept-Language") == "ja":
+                    return httpx.Response(500, request=request)
+                return httpx.Response(
+                    200,
+                    json={
+                        "data": [
+                            {
+                                "id": 123,
+                                "game_id": 456,
+                                "name": "Base Name",
+                                "description": "Base Desc",
+                                "submitted_by": {"id": 123, "username": "user-123"},
+                            }
+                        ]
+                    },
+                    request=request,
+                )
+            return httpx.Response(404, request=request)
+
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as http:
+            creds = ModioCreds.model_validate({"token": "key", "user": "user123"})
+            client = ModioClient(creds, http=http)
+            mods = await client.get_mods([ModID(provider=Provider.MODIO, id="123", game="456")], locales=["ja"])
+
+        self.assertEqual(mods[0].name.value, "Base Name")
+        self.assertEqual(mods[0].name.translations, {})
+
+    async def test_get_mods_requires_access_and_game(self) -> None:
+        transport = httpx.MockTransport(lambda request: httpx.Response(200, request=request))
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = ModioClient(None, http=http)
+            with self.assertRaises(ValueError):
+                await client.get_mods([ModID(provider=Provider.MODIO, id="123", game="456")])
+
+            creds = ModioCreds.model_validate({"token": "key", "user": "user123"})
+            client = ModioClient(creds, http=http)
+            with self.assertRaises(ValueError):
+                await client.get_mods([ModID(provider=Provider.MODIO, id="123")])

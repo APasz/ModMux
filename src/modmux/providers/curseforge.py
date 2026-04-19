@@ -1,6 +1,7 @@
 """CurseForge provider integration."""
 
-from datetime import datetime, timezone
+from collections.abc import Sequence
+from datetime import UTC, datetime
 from typing import cast
 from urllib.parse import urlsplit
 
@@ -44,7 +45,7 @@ def _parse_timestamp(value: object | None) -> datetime | None:
     if value is None:
         return None
     if isinstance(value, (int, float)):
-        return datetime.fromtimestamp(value, tz=timezone.utc)
+        return datetime.fromtimestamp(value, tz=UTC)
     if isinstance(value, str):
         cleaned = value.replace("Z", "+00:00") if value.endswith("Z") else value
         try:
@@ -106,48 +107,26 @@ class CurseforgeClient(ProviderClient):
         slug = segments[2]
         return ModID(provider=Provider.CURSEFORGE, id=slug, game=game)
 
-    async def get_mod(
-        self,
-        mod_id: ModID,
-        *,
-        locales: list[LocaleTag] | None = None,
-        author_resolution: ToggleMode | bool | UndefinedType = ToggleMode.AUTO,
-    ) -> Mod:
-        """Fetch a single mod from CurseForge.
-
-        Args;
-            mod_id: Provider-specific mod identifier.
-            locales: Optional locale tags to request translations for.
-            author_resolution: Author enrichment toggle.
-
-        Returns;
-            A normalised Mod instance.
-
-        Raises;
-            ValueError: If a slug is provided without a game id.
-        """
+    async def _resolve_mod_id(self, mod_id: ModID) -> tuple[str, str | None]:
         mod_value = str(mod_id.id).strip()
-        if not mod_value.isdigit():
-            if not mod_id.game:
-                raise ValueError("CurseForge slug lookup requires ModID.game (game id).")
-            search = await self._get_json(
-                "mods/search",
-                params={"gameId": mod_id.game, "slug": mod_value, "pageSize": 1},
-            )
-            search_data = search.get("data") if isinstance(search, dict) else None
-            if not isinstance(search_data, list) or not search_data:
-                raise NotFound(f"{self.name}: mod {mod_id.id!r} not found")
-            first = search_data[0]
-            if not isinstance(first, dict) or first.get("id") is None:
-                raise ProviderError(f"{self.name}: unexpected search response")
-            mod_value = str(first["id"])
+        if mod_value.isdigit():
+            return mod_value, mod_id.game
+        if not mod_id.game:
+            raise ValueError("CurseForge slug lookup requires ModID.game (game id).")
+        search = await self._get_json(
+            "mods/search",
+            params={"gameId": mod_id.game, "slug": mod_value, "pageSize": 1},
+        )
+        search_data = search.get("data") if isinstance(search, dict) else None
+        if not isinstance(search_data, list) or not search_data:
+            raise NotFound(f"{self.name}: mod {mod_id.id!r} not found")
+        first = search_data[0]
+        if not isinstance(first, dict) or first.get("id") is None:
+            raise ProviderError(f"{self.name}: unexpected search response")
+        return str(first["id"]), str(mod_id.game)
 
-        data = await self._get_json(f"mods/{mod_value}")
-        payload = data.get("data") if isinstance(data, dict) else None
-        if not isinstance(payload, dict):
-            raise ProviderError(f"{self.name}: unexpected response shape")
-
-        name = _coalesce(payload.get("name"), payload.get("slug"), mod_id.id)
+    def _build_mod(self, requested: ModID, payload: dict[str, object], mod_value: str) -> Mod:
+        name = _coalesce(payload.get("name"), payload.get("slug"), requested.id)
         slug = _coalesce(payload.get("slug"))
         description = _coalesce(payload.get("summary"))
         if description is not None:
@@ -182,7 +161,7 @@ class CurseforgeClient(ProviderClient):
             if isinstance(first_file, dict) and first_file.get("id") is not None:
                 latest_version_id = str(first_file.get("id"))
 
-        game_id = _coalesce(payload.get("gameId"), mod_id.game)
+        game_id = _coalesce(payload.get("gameId"), requested.game)
         mod_key = ModID(
             provider=Provider.CURSEFORGE,
             id=str(payload.get("id", mod_value)),
@@ -204,3 +183,92 @@ class CurseforgeClient(ProviderClient):
             latest_version_id=latest_version_id,
             raw=payload,
         )
+
+    async def _get_mod_single(self, mod_id: ModID) -> Mod:
+        mod_value, _ = await self._resolve_mod_id(mod_id)
+        data = await self._get_json(f"mods/{mod_value}")
+        payload = data.get("data") if isinstance(data, dict) else None
+        if not isinstance(payload, dict):
+            raise ProviderError(f"{self.name}: unexpected response shape")
+        return self._build_mod(mod_id, payload, mod_value)
+
+    async def get_mod(
+        self,
+        mod_id: ModID,
+        *,
+        locales: list[LocaleTag] | None = None,
+        author_resolution: ToggleMode | bool | UndefinedType = ToggleMode.AUTO,
+    ) -> Mod:
+        """Fetch a single mod from CurseForge.
+
+        Args;
+            mod_id: Provider-specific mod identifier.
+            locales: Optional locale tags to request translations for.
+            author_resolution: Author enrichment toggle.
+
+        Returns;
+            A normalised Mod instance.
+
+        Raises;
+            ValueError: If a slug is provided without a game id.
+        """
+        del locales, author_resolution
+        return await self._get_mod_single(mod_id)
+
+    async def get_mods(
+        self,
+        mod_ids: Sequence[ModID],
+        *,
+        locales: list[LocaleTag] | None = None,
+        author_resolution: ToggleMode | bool | UndefinedType = ToggleMode.AUTO,
+    ) -> list[Mod]:
+        """Fetch multiple mods from CurseForge."""
+        requests = list(mod_ids)
+        if not requests:
+            return []
+
+        fallback_indexes: list[int] = []
+        grouped: dict[str, list[tuple[int, ModID, str]]] = {}
+        for index, mod_id in enumerate(requests):
+            mod_value = str(mod_id.id).strip()
+            if mod_value.isdigit() and mod_id.game is None:
+                fallback_indexes.append(index)
+                continue
+            resolved_id, game_id = await self._resolve_mod_id(mod_id)
+            if game_id is None:
+                fallback_indexes.append(index)
+                continue
+            grouped.setdefault(str(game_id), []).append((index, mod_id, resolved_id))
+
+        resolved_results: dict[int, Mod] = {}
+        for game_id, entries in grouped.items():
+            unique_ids: list[int] = []
+            for _, _, resolved_id in entries:
+                value = int(resolved_id)
+                if value not in unique_ids:
+                    unique_ids.append(value)
+
+            data = await self._post_json("mods", json={"modIds": unique_ids})
+            payloads = data.get("data") if isinstance(data, dict) else None
+            if not isinstance(payloads, list):
+                raise ProviderError(f"{self.name}: unexpected response shape")
+
+            payload_by_id: dict[str, dict[str, object]] = {}
+            for payload in payloads:
+                if not isinstance(payload, dict):
+                    continue
+                payload_id = payload.get("id")
+                if payload_id is not None:
+                    payload_by_id[str(payload_id)] = payload
+
+            for index, requested, resolved_id in entries:
+                payload = payload_by_id.get(resolved_id)
+                if payload is None:
+                    raise NotFound(f"{self.name}: mod {requested.id!r} not found")
+                resolved_results[index] = self._build_mod(requested, payload, resolved_id)
+
+        if fallback_indexes:
+            for index in fallback_indexes:
+                resolved_results[index] = await self._get_mod_single(requests[index])
+
+        return [resolved_results[index] for index in range(len(requests))]

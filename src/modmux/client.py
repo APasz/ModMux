@@ -134,6 +134,36 @@ class Muxer:
         next_mode = ToggleMode.ON if should_enrich_author else ToggleMode.OFF
         return await self._p(provider).get_mod(mod_id, locales=locales, author_resolution=next_mode)
 
+    async def get_mods(
+        self,
+        provider: Provider,
+        mod_ids: Sequence[ModID],
+        *,
+        locales: list[LocaleTag] | None = None,
+        author_resolution: ToggleMode | bool | UndefinedType = ToggleMode.AUTO,
+    ) -> list[Mod]:
+        """Fetch multiple mods using the configured provider client.
+
+        Args;
+            provider: Provider to query.
+            mod_ids: Provider-specific mod identifiers.
+            locales: Optional locale tags to request translations for.
+            author_resolution: Author enrichment toggle.
+
+        Returns;
+            A list of normalised Mod instances in input order.
+
+        Raises;
+            ValueError: If any ModID provider does not match the target provider.
+        """
+        ids = list(mod_ids)
+        for mod_id in ids:
+            if mod_id.provider != provider:
+                raise ValueError(f"ModID.provider must match {provider}, got {mod_id.provider}")
+        should_enrich_author = resolve_toggle(author_resolution, default=False)
+        next_mode = ToggleMode.ON if should_enrich_author else ToggleMode.OFF
+        return await self._p(provider).get_mods(ids, locales=locales, author_resolution=next_mode)
+
     async def get_user(self, provider: Provider, user_id: str) -> Author:
         """Fetch a user using the configured provider client.
 

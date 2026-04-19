@@ -1,6 +1,7 @@
 """mod.io provider integration."""
 
-from datetime import datetime, timezone
+from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
 from typing import cast
 from urllib.parse import urlsplit
 
@@ -47,7 +48,7 @@ def _parse_timestamp(value: object | None) -> datetime | None:
     if value is None:
         return None
     if isinstance(value, (int, float)):
-        return datetime.fromtimestamp(value, tz=timezone.utc)
+        return datetime.fromtimestamp(value, tz=UTC)
     if isinstance(value, str):
         try:
             return datetime.fromisoformat(value)
@@ -88,6 +89,16 @@ def _extract_first_item(payload: object) -> dict | None:
     return None
 
 
+def _extract_items(payload: object) -> list[dict[str, object]]:
+    if isinstance(payload, dict) and "data" in payload:
+        payload = payload["data"]
+    if isinstance(payload, list):
+        return [entry for entry in payload if isinstance(entry, dict)]
+    if isinstance(payload, dict):
+        return [payload]
+    return []
+
+
 def _mod_cache_key(game_id: str, value: str) -> str:
     return f"{game_id}:{value}"
 
@@ -110,6 +121,9 @@ def _localised_text(value: str | None, translations: dict[LocaleTag, str]) -> Lo
     if value is None:
         return None
     return LocalisedText(value=value, translations=translations)
+
+
+_MODIO_BATCH_SIZE = 100
 
 
 @register
@@ -140,77 +154,108 @@ class ModioClient(ProviderClient):
             return ModID(provider=Provider.MODIO, id=segments[3], game=segments[1])
         return None
 
-    async def get_mod(
-        self,
-        mod_id: ModID,
-        *,
-        locales: list[LocaleTag] | None = None,
-        author_resolution: ToggleMode | bool | UndefinedType = ToggleMode.AUTO,
-    ) -> Mod:
-        """Fetch a single mod from mod.io.
-
-        Args;
-            mod_id: Provider-specific mod identifier.
-            locales: Optional locale tags to request translations for.
-            author_resolution: Author enrichment toggle.
-
-        Returns;
-            A normalised Mod instance.
-
-        Raises;
-            ValueError: If the game id is missing from the ModID or user id is missing.
-        """
-        if not mod_id.game:
-            raise ValueError("mod.io requires ModID.game (game id).")
+    def _require_access(self) -> None:
         if not self.creds or not self.creds.user_id:
             raise ValueError("mod.io requires a user id for API access.")
 
-        game_id = str(mod_id.game).strip()
-        if not _is_numeric(game_id):
-            if self.cache:
-                cached_id = await self.cache.game_slug_to_id.get(game_id)
-                if cached_id is not None:
-                    game_id = str(cached_id)
-            if not _is_numeric(game_id):
-                game_data = await self._get_json("games", params={"name_id": game_id, "limit": 1})
-                game_item = _extract_first_item(game_data)
-                if not game_item or game_item.get("id") is None:
-                    raise NotFound(f"{self.name}: game {mod_id.game!r} not found")
-                game_id = str(game_item["id"])
-                game_slug = _coalesce(game_item.get("name_id"), game_item.get("slug"))
-                if self.cache and game_slug is not None:
-                    await self.cache.game_slug_to_id.set(str(game_slug), game_id)
-                    await self.cache.game_id_to_slug.set(game_id, str(game_slug))
+    async def _resolve_game_id(self, game: str) -> str:
+        game_id = str(game).strip()
+        if _is_numeric(game_id):
+            return game_id
+        if self.cache:
+            cached_id = await self.cache.game_slug_to_id.get(game_id)
+            if cached_id is not None:
+                return str(cached_id)
 
-        mod_value = str(mod_id.id).strip()
-        if not _is_numeric(mod_value):
-            if self.cache:
-                cached_id = await self.cache.mod_slug_to_id.get(_mod_cache_key(game_id, mod_value))
-                if cached_id is not None:
-                    mod_value = str(cached_id)
-            if not _is_numeric(mod_value):
-                mod_data = await self._get_json(f"games/{game_id}/mods", params={"name_id": mod_value, "limit": 1})
-                mod_item = _extract_first_item(mod_data)
-                if not mod_item or mod_item.get("id") is None:
-                    raise NotFound(f"{self.name}: mod {mod_id.id!r} not found")
-                mod_value = str(mod_item["id"])
-                mod_slug = _coalesce(mod_item.get("name_id"), mod_item.get("slug"))
-                if self.cache and mod_slug is not None:
-                    key = _mod_cache_key(game_id, str(mod_slug))
-                    await self.cache.mod_slug_to_id.set(key, mod_value)
-                    await self.cache.mod_id_to_slug.set(_mod_cache_key(game_id, mod_value), str(mod_slug))
+        game_data = await self._get_json("games", params={"name_id": game_id, "limit": 1})
+        game_item = _extract_first_item(game_data)
+        if not game_item or game_item.get("id") is None:
+            raise NotFound(f"{self.name}: game {game!r} not found")
 
-        data = await self._get_json(f"games/{game_id}/mods/{mod_value}")
-        if isinstance(data, dict) and (data.get("error") or data.get("error_ref")):
-            raise ProviderError(f"{self.name}: {data.get('error') or data.get('error_ref')}")
+        resolved_id = str(game_item["id"])
+        game_slug = _coalesce(game_item.get("name_id"), game_item.get("slug"))
+        if self.cache and game_slug is not None:
+            await self.cache.game_slug_to_id.set(str(game_slug), resolved_id)
+            await self.cache.game_id_to_slug.set(resolved_id, str(game_slug))
+        return resolved_id
 
-        payload = _extract_first_item(data)
-        if payload is None:
-            raise NotFound(f"{self.name}: mod {mod_id.id!r} not found")
-        if not isinstance(payload, dict):
-            raise ProviderError(f"{self.name}: unexpected response shape")
+    async def _resolve_mod_id(self, game_id: str, mod_value: str) -> str:
+        resolved_value = str(mod_value).strip()
+        if _is_numeric(resolved_value):
+            return resolved_value
+        if self.cache:
+            cached_id = await self.cache.mod_slug_to_id.get(_mod_cache_key(game_id, resolved_value))
+            if cached_id is not None:
+                return str(cached_id)
 
-        name = _coalesce(payload.get("name"), payload.get("mod_name"), mod_id.id)
+        mod_data = await self._get_json(f"games/{game_id}/mods", params={"name_id": resolved_value, "limit": 1})
+        mod_item = _extract_first_item(mod_data)
+        if not mod_item or mod_item.get("id") is None:
+            raise NotFound(f"{self.name}: mod {mod_value!r} not found")
+
+        resolved_id = str(mod_item["id"])
+        mod_slug = _coalesce(mod_item.get("name_id"), mod_item.get("slug"))
+        if self.cache and mod_slug is not None:
+            key = _mod_cache_key(game_id, str(mod_slug))
+            await self.cache.mod_slug_to_id.set(key, resolved_id)
+            await self.cache.mod_id_to_slug.set(_mod_cache_key(game_id, resolved_id), str(mod_slug))
+        return resolved_id
+
+    async def _fetch_mods_batch(
+        self,
+        game_id: str,
+        mod_ids: Sequence[str],
+        *,
+        locale: str | None = None,
+    ) -> dict[str, dict[str, object]]:
+        mods_by_id: dict[str, dict[str, object]] = {}
+        if not mod_ids:
+            return mods_by_id
+
+        headers: dict[str, str] | None = None
+        if locale is not None:
+            headers = {"Accept-Language": locale}
+
+        for start in range(0, len(mod_ids), _MODIO_BATCH_SIZE):
+            batch = list(mod_ids[start : start + _MODIO_BATCH_SIZE])
+            data = await self._get_json(
+                f"games/{game_id}/mods",
+                params={"id-in": ",".join(batch), "limit": len(batch)},
+                headers=headers,
+            )
+            if isinstance(data, dict) and (data.get("error") or data.get("error_ref")):
+                raise ProviderError(f"{self.name}: {data.get('error') or data.get('error_ref')}")
+            for payload in _extract_items(data):
+                mod_value = _coalesce(payload.get("id"))
+                if mod_value is None:
+                    continue
+                mods_by_id[str(mod_value)] = payload
+
+        return mods_by_id
+
+    async def _update_cache_from_payload(self, game_id: str, payload: Mapping[str, object]) -> None:
+        if not self.cache:
+            return
+        payload_slug = _coalesce(payload.get("name_id"), payload.get("slug"))
+        payload_id = _coalesce(payload.get("id"))
+        if payload_slug is None or payload_id is None:
+            return
+        slug = str(payload_slug)
+        mod_value = str(payload_id)
+        await self.cache.mod_slug_to_id.set(_mod_cache_key(game_id, slug), mod_value)
+        await self.cache.mod_id_to_slug.set(_mod_cache_key(game_id, mod_value), slug)
+
+    def _build_mod(
+        self,
+        requested: ModID,
+        *,
+        game_id: str,
+        mod_value: str,
+        payload: Mapping[str, object],
+        name_translations: dict[LocaleTag, str],
+        description_translations: dict[LocaleTag, str],
+    ) -> Mod:
+        name = _coalesce(payload.get("name"), payload.get("mod_name"), requested.id)
         slug = _coalesce(payload.get("name_id"), payload.get("slug"))
         description = _coalesce(payload.get("description"), payload.get("summary"))
         if description is not None:
@@ -248,44 +293,13 @@ class ModioClient(ProviderClient):
         if isinstance(modfile, dict) and modfile.get("id") is not None:
             latest_version_id = str(modfile.get("id"))
 
-        game_id = _coalesce(payload.get("game_id"), game_id)
-        mod_key = ModID(provider=Provider.MODIO, id=str(_coalesce(payload.get("id"), mod_value)), game=str(game_id))
+        resolved_game_id = _coalesce(payload.get("game_id"), game_id)
+        mod_key = ModID(
+            provider=Provider.MODIO,
+            id=str(_coalesce(payload.get("id"), mod_value)),
+            game=str(resolved_game_id),
+        )
         author = Author(provider=Provider.MODIO, id=str(author_id), name=str(author_name), raw=dict(submitted_by))
-
-        if self.cache:
-            payload_slug = _coalesce(payload.get("name_id"), payload.get("slug"))
-            if payload_slug is not None:
-                payload_slug = str(payload_slug)
-                game_key = str(game_id)
-                await self.cache.mod_slug_to_id.set(_mod_cache_key(game_key, payload_slug), str(mod_key.id))
-                await self.cache.mod_id_to_slug.set(_mod_cache_key(game_key, str(mod_key.id)), payload_slug)
-
-        locale_tags = _normalise_locales(locales)
-        name_translations: dict[LocaleTag, str] = {}
-        description_translations: dict[LocaleTag, str] = {}
-        if locale_tags:
-            for locale in locale_tags:
-                try:
-                    translated = await self._get_json(
-                        f"games/{game_id}/mods/{mod_value}",
-                        headers={"Accept-Language": locale},
-                    )
-                except ModMuxError as exc:
-                    log.debug("mod.io localization fetch failed for %s: %s", locale, exc)
-                    continue
-                translated_payload = _extract_first_item(translated)
-                if not isinstance(translated_payload, dict):
-                    log.debug("mod.io localization payload not a dict for %s", locale)
-                    continue
-                translated_name = _coalesce(translated_payload.get("name"), translated_payload.get("mod_name"))
-                if translated_name is not None:
-                    name_translations[locale] = str(translated_name)
-                translated_description = _coalesce(
-                    translated_payload.get("description"),
-                    translated_payload.get("summary"),
-                )
-                if translated_description is not None:
-                    description_translations[locale] = str(translated_description)
 
         return Mod(
             provider=Provider.MODIO,
@@ -299,5 +313,105 @@ class ModioClient(ProviderClient):
             created_at=created_at,
             updated_at=updated_at,
             latest_version_id=latest_version_id,
-            raw=payload,
+            raw=dict(payload),
         )
+
+    async def get_mod(
+        self,
+        mod_id: ModID,
+        *,
+        locales: list[LocaleTag] | None = None,
+        author_resolution: ToggleMode | bool | UndefinedType = ToggleMode.AUTO,
+    ) -> Mod:
+        """Fetch a single mod from mod.io.
+
+        Args;
+            mod_id: Provider-specific mod identifier.
+            locales: Optional locale tags to request translations for.
+            author_resolution: Author enrichment toggle.
+
+        Returns;
+            A normalised Mod instance.
+
+        Raises;
+            ValueError: If the game id is missing from the ModID or user id is missing.
+        """
+        mods = await self.get_mods([mod_id], locales=locales, author_resolution=author_resolution)
+        return mods[0]
+
+    async def get_mods(
+        self,
+        mod_ids: Sequence[ModID],
+        *,
+        locales: list[LocaleTag] | None = None,
+        author_resolution: ToggleMode | bool | UndefinedType = ToggleMode.AUTO,
+    ) -> list[Mod]:
+        """Fetch multiple mods from mod.io."""
+        del author_resolution
+
+        requests = list(mod_ids)
+        if not requests:
+            return []
+
+        self._require_access()
+
+        resolved_requests: list[tuple[ModID, str, str]] = []
+        grouped_ids: dict[str, list[str]] = {}
+        for mod_id in requests:
+            if not mod_id.game:
+                raise ValueError("mod.io requires ModID.game (game id).")
+            game_id = await self._resolve_game_id(str(mod_id.game))
+            mod_value = await self._resolve_mod_id(game_id, str(mod_id.id))
+            resolved_requests.append((mod_id, game_id, mod_value))
+            grouped_ids.setdefault(game_id, [])
+            if mod_value not in grouped_ids[game_id]:
+                grouped_ids[game_id].append(mod_value)
+
+        payloads_by_game: dict[str, dict[str, dict[str, object]]] = {}
+        for game_id, game_mod_ids in grouped_ids.items():
+            payloads = await self._fetch_mods_batch(game_id, game_mod_ids)
+            payloads_by_game[game_id] = payloads
+            for payload in payloads.values():
+                await self._update_cache_from_payload(game_id, payload)
+
+        name_translations: dict[tuple[str, str], dict[LocaleTag, str]] = {}
+        description_translations: dict[tuple[str, str], dict[LocaleTag, str]] = {}
+        locale_tags = _normalise_locales(locales)
+        if locale_tags:
+            for locale in locale_tags:
+                for game_id, game_mod_ids in grouped_ids.items():
+                    try:
+                        translated_payloads = await self._fetch_mods_batch(game_id, game_mod_ids, locale=locale)
+                    except ModMuxError as exc:
+                        log.debug("mod.io localization fetch failed for %s: %s", locale, exc)
+                        continue
+                    for mod_value, translated_payload in translated_payloads.items():
+                        translated_name = _coalesce(translated_payload.get("name"), translated_payload.get("mod_name"))
+                        if translated_name is not None:
+                            name_translations.setdefault((game_id, mod_value), {})[locale] = str(translated_name)
+                        translated_description = _coalesce(
+                            translated_payload.get("description"),
+                            translated_payload.get("summary"),
+                        )
+                        if translated_description is not None:
+                            description_translations.setdefault((game_id, mod_value), {})[locale] = str(
+                                translated_description
+                            )
+
+        mods: list[Mod] = []
+        for requested, game_id, mod_value in resolved_requests:
+            payload = payloads_by_game.get(game_id, {}).get(mod_value)
+            if payload is None:
+                raise NotFound(f"{self.name}: mod {requested.id!r} not found")
+            mods.append(
+                self._build_mod(
+                    requested,
+                    game_id=game_id,
+                    mod_value=mod_value,
+                    payload=payload,
+                    name_translations=name_translations.get((game_id, mod_value), {}),
+                    description_translations=description_translations.get((game_id, mod_value), {}),
+                )
+            )
+
+        return mods
