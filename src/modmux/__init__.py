@@ -23,6 +23,7 @@ from .providers.modio import ModioCreds
 from .providers.modrinth import ModrinthCreds
 from .providers.nexusmods import NexusCreds
 from .providers.steam import SteamCreds
+from .providers.transportfevernet import TransportfevernetClient
 from .providers.wube import WubeCreds
 from .toggles import ToggleMode
 from .utils.urls import parse_url
@@ -56,6 +57,7 @@ __all__ = [
     "RateLimited",
     "SteamCreds",
     "ToggleMode",
+    "TransportfevernetClient",
     "modmux_client",
     "parse_url",
     "WubeCreds",

@@ -23,6 +23,7 @@ class TestParseUrl(unittest.TestCase):
             ("https://mod.io/g/4321/m/some-mod", Provider.MODIO, "some-mod", "4321"),
             ("https://steamcommunity.com/sharedfiles/filedetails/?id=12345&appid=480", Provider.STEAM, "12345", "480"),
             ("https://mods.factorio.com/mod/rso-mod", Provider.WUBE, "rso-mod", None),
+            ("https://www.transportfever.net/filebase/entry/7867-cable-car/", Provider.TRANSPORTFEVERNET, "7867", None),
         ]
         for url, provider, mod_id, game in cases:
             with self.subTest(url=url):

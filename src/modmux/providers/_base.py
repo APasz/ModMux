@@ -289,6 +289,7 @@ class ProviderClient(abc.ABC):
         json: Any | None = None,
         timeout: float | httpx.Timeout | None = None,
         max_attempts: int = 2,
+        follow_redirects: bool = False,
     ) -> httpx.Response:
         """Perform a rate-limited POST with retries and error mapping.
 
@@ -300,6 +301,7 @@ class ProviderClient(abc.ABC):
             json: Optional JSON payload.
             timeout: Optional request timeout.
             max_attempts: Maximum request attempts on retryable failures.
+            follow_redirects: Whether to follow HTTP redirects.
 
         Returns;
             The successful HTTP response.
@@ -337,6 +339,7 @@ class ProviderClient(abc.ABC):
                         data=data,
                         json=json,
                         timeout=effective_timeout,
+                        follow_redirects=follow_redirects,
                     )
 
                 if 200 <= response.status_code < 300:

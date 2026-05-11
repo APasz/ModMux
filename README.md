@@ -22,6 +22,7 @@ Unified async client for multiple game mod platforms. ModMux normalises provider
 - Mod.io
 - Steam Workshop
 - Factorio Mod Portal (Wube)
+- transportfever.net
 
 ## Requirements
 - Python 3.13+
@@ -160,6 +161,8 @@ modmux CURSEFORGE 238222 --pretty
 modmux STEAM 123 456 --pretty
 modmux NEXUSMODS 12345 --game transportfever2
 modmux MODIO some-mod --game 4321 --user 12345 --token <api-key>
+modmux TRANSPORTFEVERNET 7867 --pretty
+modmux TRANSPORTFEVERNET urbanist_classic_station_1 --game tpf1 --pretty
 modmux --from-urls urls.txt --pretty
 ```
 
@@ -178,5 +181,6 @@ When using `--from-urls`, provide one mod URL per line. Blank lines and lines st
 - Nexus Mods: requires `ModID.game` (game domain, e.g. `skyrim`).
 - mod.io: requires `ModID.game` plus a user id (use `--user` or `MODMUX_MODIO_USER`).
 - Steam: uses a Workshop published file id; `ModID.game` is optional.
+- transportfever.net: uses the TPF2 repository by default; set `ModID.game` to `tpf1`, `tf1`, or `transportfever1` for the TPF1 repository.
 - Wube: uses the Factorio mod name slug.
-- Native bulk lookup is currently implemented for Modrinth, CurseForge, Steam Workshop, and mod.io.
+- Native bulk lookup is currently implemented for Modrinth, CurseForge, Steam Workshop, mod.io, and transportfever.net.

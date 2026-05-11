@@ -16,6 +16,7 @@ class Provider(StrEnum):
     WUBE = "WUBE"
     MODIO = "MODIO"
     STEAM = "STEAM"
+    TRANSPORTFEVERNET = "TRANSPORTFEVERNET"
 
 
 class DependencyRelation(StrEnum):

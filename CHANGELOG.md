@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+## 0.5.0 - 2026-05-12
+
+### Added
+- Add transportfever.net provider support using the Transport Fever CommonAPI repositories.
+- Add a transportfever.net HTML fallback for filebase entry IDs missing from the repository refresh.
+- Add `tpf1` and `tpf2` game selection for transportfever.net repository lookups.
+- Accept `tf1`/`tf2` and `transportfever1`/`transportfever2` aliases for transportfever.net game selection.
+
 ## 0.4.0
 
 ### Added
