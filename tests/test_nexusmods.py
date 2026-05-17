@@ -27,8 +27,8 @@ class TestNexusmodsClient(unittest.IsolatedAsyncioTestCase):
                     "author": "schlangster",
                     "user_id": 11,
                     "user": {"member_id": 11, "name": "schlangster"},
-                    "created_time": "2023-01-01T00:00:00+00:00",
-                    "updated_time": "2023-01-02T00:00:00+00:00",
+                    "created_time": "2023-01-01T00:00:00Z",
+                    "updated_time": "2023-01-02T00:00:00Z",
                     "category_name": "Utilities",
                     "tags": ["ui", "skse"],
                     "mod_page_url": "https://www.nexusmods.com/skyrim/mods/123",
@@ -51,6 +51,8 @@ class TestNexusmodsClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mod.tags, ["Utilities", "ui", "skse"])
         self.assertEqual(mod.latest_version_id, "5.2")
         self.assertEqual(str(mod.homepage), "https://www.nexusmods.com/skyrim/mods/123")
+        self.assertIsNotNone(mod.created_at)
+        self.assertIsNotNone(mod.updated_at)
 
     async def test_get_mod_requires_game(self) -> None:
         async with httpx.AsyncClient(transport=_ok_transport()) as http:

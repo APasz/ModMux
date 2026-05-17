@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from html.parser import HTMLParser
 from typing import Any, cast
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from httpx import AsyncClient
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, ValidationError
@@ -514,7 +514,7 @@ class TransportfevernetClient(ProviderClient):
         segments = cls._path_segments(parts.path)
         entry_id = cls._entry_id_from_segments(segments)
         if entry_id is None and parts.query:
-            entry_id = cls._entry_id_from_segments(cls._path_segments(parts.query))
+            entry_id = cls._entry_id_from_segments(cls._path_segments(unquote(parts.query)))
         if entry_id is None:
             return None
         return ModID(provider=Provider.TRANSPORTFEVERNET, id=entry_id)

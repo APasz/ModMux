@@ -99,7 +99,13 @@ class ProviderCreds(BaseModel):
         return base
 
     def __hash__(self) -> int:
-        return hash((self.provider, self.headers(), self.params()))
+        return hash(
+            (
+                self.provider,
+                tuple(sorted(self.headers().items())),
+                tuple(sorted(self.params().items())),
+            )
+        )
 
 
 class ModID(BaseModel):

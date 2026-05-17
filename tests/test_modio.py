@@ -28,6 +28,8 @@ class TestModioClient(unittest.IsolatedAsyncioTestCase):
                                 "game_id": 456,
                                 "name": "Base Name",
                                 "description": "Base Desc",
+                                "date_added": "2023-01-01T00:00:00Z",
+                                "date_updated": "2023-01-02T00:00:00Z",
                                 "dependencies": True,
                                 "modfile": {
                                     "id": 999,
@@ -73,6 +75,8 @@ class TestModioClient(unittest.IsolatedAsyncioTestCase):
             [dependency.relation for dependency in mod.latest_version.dependencies],
             [DependencyRelation.REQUIRED, DependencyRelation.REQUIRED],
         )
+        self.assertIsNotNone(mod.created_at)
+        self.assertIsNotNone(mod.updated_at)
 
     async def test_get_mod_populates_translations(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:

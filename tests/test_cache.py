@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import sys
 import unittest
 from pathlib import Path
@@ -33,3 +34,33 @@ class TestAsyncTTLCache(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(await cache.get("first"))
         self.assertEqual(await cache.get("second"), "b")
+
+    async def test_get_or_set_caches_none_values(self) -> None:
+        cache = AsyncTTLCache(ttl=None, maxsize=4)
+        calls = 0
+
+        async def factory() -> None:
+            nonlocal calls
+            calls += 1
+            return None
+
+        first = await cache.get_or_set("key", factory)
+        second = await cache.get_or_set("key", factory)
+
+        self.assertIsNone(first)
+        self.assertIsNone(second)
+        self.assertEqual(calls, 1)
+
+    async def test_lock_table_does_not_grow_with_evicted_keys(self) -> None:
+        cache = AsyncTTLCache(ttl=None, maxsize=1)
+
+        async def factory(value: int) -> int:
+            return value
+
+        for index in range(5):
+            await cache.get_or_set(f"key-{index}", lambda index=index: factory(index))
+
+        gc.collect()
+
+        self.assertEqual(len(cache._data), 1)
+        self.assertLessEqual(len(cache._locks), 1)

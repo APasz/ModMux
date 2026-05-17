@@ -114,6 +114,8 @@ class TestSteamClient(unittest.IsolatedAsyncioTestCase):
                             "title": title,
                             "description": description,
                             "creator": "author1",
+                            "time_created": "2023-01-01T00:00:00Z",
+                            "time_updated": "2023-01-02T00:00:00Z",
                         }
                     ]
                 }
@@ -135,6 +137,8 @@ class TestSteamClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mod.description_md.translations["ja"], "JP Desc")
         self.assertEqual(mod.description_md.translations["en-gb"], "EN Desc")
         self.assertEqual(mod.description_md.translations["es-es"], "ES Desc")
+        self.assertIsNotNone(mod.created_at)
+        self.assertIsNotNone(mod.updated_at)
 
     async def test_get_mod_skips_author_lookup_by_default(self) -> None:
         calls: dict[str, int] = {"details": 0, "user": 0}

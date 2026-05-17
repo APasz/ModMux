@@ -208,6 +208,11 @@ class TestTransportfevernetClient(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(legacy, ModID(provider=Provider.TRANSPORTFEVERNET, id="7867"))
 
+        encoded_legacy = TransportfevernetClient.parse_url(
+            "https://www.transportfever.net/filebase/index.php?entry%2F6047-schallschutzw%C3%A4nde-von-spyos%2F%3A"
+        )
+        self.assertEqual(encoded_legacy, ModID(provider=Provider.TRANSPORTFEVERNET, id="6047"))
+
         self.assertIsNone(TransportfevernetClient.parse_url("https://example.com/filebase/entry/7867-cable-car/"))
         self.assertIsNone(TransportfevernetClient.parse_url("https://www.transportfever.net/filebase/"))
 

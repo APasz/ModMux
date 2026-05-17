@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+## 0.5.1
+
+### Fixed
+- Fix transportfever.net legacy `index.php?entry...` URL parsing when the query path is percent-encoded.
+- Fix `ProviderCreds` hashing so frozen credential models are actually hashable.
+- Fix `AsyncTTLCache` to cache `None` values correctly and avoid unbounded per-key lock growth.
+- Fix mod.io, Nexus Mods, and Steam timestamp parsing for ISO 8601 values with a trailing `Z`.
+
 ## 0.5.0
 
 ### Added

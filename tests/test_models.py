@@ -7,6 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from modmux.models import Author, Dependency, DependencyRelation, LocalisedText, Mod, ModID, ModVersion, Provider
+from modmux.providers.modrinth import ModrinthCreds
 
 
 class TestModels(unittest.TestCase):
@@ -37,3 +38,10 @@ class TestModels(unittest.TestCase):
 
     def test_provider_enum(self) -> None:
         self.assertEqual(Provider("MODRINTH"), Provider.MODRINTH)
+
+    def test_provider_creds_are_hashable(self) -> None:
+        creds = ModrinthCreds.model_validate({"token": "secret"})
+        same_creds = ModrinthCreds.model_validate({"token": "secret"})
+
+        self.assertIsInstance(hash(creds), int)
+        self.assertEqual(hash(creds), hash(same_creds))
