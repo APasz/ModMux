@@ -1,5 +1,6 @@
 """Nexus Mods provider integration."""
 
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import cast
 from urllib.parse import urlsplit
@@ -8,7 +9,7 @@ from httpx import AsyncClient
 from pydantic import AnyHttpUrl, Field, SecretStr
 
 from .._log import get_logger
-from ..models import Author, LocaleTag, LocalisedText, Mod, ModID, Provider, ProviderCreds
+from ..models import Author, FileAsset, LocaleTag, LocalisedText, Mod, ModID, ModVersion, Provider, ProviderCreds
 from ..toggles import ToggleMode, UndefinedType
 from ..utils.discovery import register
 from ._base import ProviderClient
@@ -51,6 +52,62 @@ def _parse_timestamp(value: object | None) -> datetime | None:
     return None
 
 
+def _extract_file_payloads(payload: object) -> list[dict[str, object]]:
+    if not isinstance(payload, dict):
+        return []
+    raw_files = payload.get("files")
+    if not isinstance(raw_files, list):
+        return []
+    return [entry for entry in raw_files if isinstance(entry, dict)]
+
+
+def _is_visible_file(entry: Mapping[str, object]) -> bool:
+    category_id = entry.get("category_id")
+    if isinstance(category_id, int) and category_id in {6, 7}:
+        return False
+    category_name = entry.get("category_name")
+    if isinstance(category_name, str) and category_name.strip().casefold() in {"deleted", "archived"}:
+        return False
+    return True
+
+
+def _file_matches_version(entry: Mapping[str, object], version: str) -> bool:
+    for key in ("version", "mod_version"):
+        value = entry.get(key)
+        if isinstance(value, str) and value.strip() == version:
+            return True
+    return False
+
+
+def _select_latest_file_payloads(mod_payload: Mapping[str, object], files_payload: object) -> list[dict[str, object]]:
+    visible_files = [entry for entry in _extract_file_payloads(files_payload) if _is_visible_file(entry)]
+    if not visible_files:
+        return []
+
+    raw_version = _coalesce(mod_payload.get("version"))
+    if raw_version is None:
+        return visible_files
+
+    latest_version = str(raw_version).strip()
+    if not latest_version:
+        return visible_files
+
+    matching_files = [entry for entry in visible_files if _file_matches_version(entry, latest_version)]
+    if matching_files:
+        return matching_files
+    return []
+
+
+def _build_file_asset(entry: Mapping[str, object]) -> FileAsset | None:
+    file_id = entry.get("file_id")
+    filename = _coalesce(entry.get("file_name"), entry.get("name"))
+    if file_id is None or filename is None:
+        return None
+    size = entry.get("size")
+    size_bytes = size if isinstance(size, int) else None
+    return FileAsset(file_id=str(file_id), filename=str(filename), size_bytes=size_bytes)
+
+
 @register
 class NexusmodsClient(ProviderClient):
     """Client for Nexus Mods mod metadata."""
@@ -64,6 +121,37 @@ class NexusmodsClient(ProviderClient):
 
     def __init__(self, creds: NexusCreds | None, *, http: AsyncClient, cache: object | None = None) -> None:
         super().__init__(creds, http=http, cache=cache)
+
+    def _build_latest_version(self, mod_key: ModID, mod_payload: Mapping[str, object], files_payload: object) -> ModVersion | None:
+        selected_files = _select_latest_file_payloads(mod_payload, files_payload)
+        latest_files = [asset for entry in selected_files if (asset := _build_file_asset(entry)) is not None]
+
+        raw_version = _coalesce(mod_payload.get("version"))
+        version = str(raw_version).strip() if raw_version is not None else None
+        if version == "":
+            version = None
+
+        if version is None and not latest_files:
+            return None
+
+        published_candidates = [
+            timestamp
+            for entry in selected_files
+            if (timestamp := _parse_timestamp(entry.get("uploaded_time"))) is not None
+        ]
+        published_at = max(published_candidates) if published_candidates else None
+
+        return ModVersion(
+            id=mod_key,
+            name=version,
+            version=version,
+            published_at=published_at,
+            files=latest_files,
+            raw={
+                "version": version,
+                "files": [dict(entry) for entry in selected_files],
+            },
+        )
 
     @classmethod
     def parse_url(cls, url: str) -> ModID | None:
@@ -107,6 +195,7 @@ class NexusmodsClient(ProviderClient):
         if not mod_id.game:
             raise ValueError("Nexus Mods requires ModID.game (game domain name).")
         data = await self._get_json(f"games/{mod_id.game}/mods/{mod_id.id}.json")
+        files_data = await self._get_json(f"games/{mod_id.game}/mods/{mod_id.id}/files.json")
 
         user = data.get("user")
         if not isinstance(user, dict):
@@ -148,6 +237,7 @@ class NexusmodsClient(ProviderClient):
 
         mod_key = ModID(provider=Provider.NEXUSMODS, id=str(mod_id.id), game=mod_id.game)
         author = Author(provider=Provider.NEXUSMODS, id=str(author_id), name=str(author_name), raw=dict(user))
+        latest_version = self._build_latest_version(mod_key, data, files_data)
 
         description = _coalesce(data.get("description"), data.get("description_markdown"), data.get("summary"))
         if description is not None:
@@ -165,5 +255,9 @@ class NexusmodsClient(ProviderClient):
             created_at=created_at,
             updated_at=updated_at,
             latest_version_id=str(data.get("version")) if data.get("version") is not None else None,
-            raw=data,
+            latest_version=latest_version,
+            raw={
+                "mod": data,
+                "files": files_data,
+            },
         )

@@ -19,6 +19,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+## 0.6.0
+
+### Changed
+- Nexus Mods `Mod.raw` now stores a combined provider payload with both the main mod response and the file listing, instead of only the top-level mod response.
+
+### Fixed
+- Populate `latest_version.files` for Nexus Mods by fetching the dedicated `files.json` endpoint.
+- Populate `latest_version.files` for Steam Workshop when `GetPublishedFileDetails` exposes file metadata.
+- Stop Nexus Mods from attaching older or unrelated visible files to `latest_version` when the current mod version cannot be matched to a file payload entry.
+
 ## 0.5.1
 
 ### Fixed

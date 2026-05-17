@@ -2,6 +2,7 @@
 
 from collections.abc import Sequence
 from datetime import UTC, datetime
+from os.path import basename
 from typing import cast
 from urllib.parse import parse_qs, urlsplit
 
@@ -9,7 +10,7 @@ from httpx import AsyncClient
 from pydantic import AliasChoices, AnyHttpUrl, Field, SecretStr
 
 from .._log import get_logger
-from ..models import Author, LocaleTag, LocalisedText, Mod, ModID, Provider, ProviderCreds
+from ..models import Author, FileAsset, LocaleTag, LocalisedText, Mod, ModID, ModVersion, Provider, ProviderCreds
 from ..modmux_errors import ModMuxError, NotFound, ProviderError
 from ..toggles import ToggleMode, UndefinedType, resolve_toggle
 from ..utils.discovery import register
@@ -68,6 +69,19 @@ def _extract_tags(raw: object) -> list[str]:
                 if name is not None:
                     tags.append(str(name))
     return tags
+
+
+def _extract_filename(details: dict[str, object]) -> str | None:
+    filename = details.get("filename")
+    if isinstance(filename, str) and filename.strip():
+        return filename
+
+    file_url = details.get("file_url")
+    if isinstance(file_url, str) and file_url.strip():
+        candidate = basename(urlsplit(file_url).path)
+        if candidate:
+            return candidate
+    return None
 
 
 _STEAM_LANGUAGE_MAP: dict[str, str] = {
@@ -294,6 +308,37 @@ class SteamClient(ProviderClient):
 
         return authors
 
+    def _build_latest_version(
+        self,
+        mod_key: ModID,
+        details: dict[str, object],
+        *,
+        updated_at: datetime | None,
+    ) -> ModVersion | None:
+        filename = _extract_filename(details)
+        if filename is None:
+            return None
+
+        file_id = _coalesce(details.get("hcontent_file"), details.get("publishedfileid"), filename)
+        file_size = details.get("file_size")
+        raw_revision = _coalesce(details.get("revision_change_number"), details.get("revision"))
+        version = str(raw_revision) if raw_revision is not None else None
+
+        return ModVersion(
+            id=mod_key,
+            name=filename,
+            version=version,
+            published_at=updated_at,
+            files=[
+                FileAsset(
+                    file_id=str(file_id),
+                    filename=filename,
+                    size_bytes=file_size if isinstance(file_size, int) else None,
+                )
+            ],
+            raw=dict(details),
+        )
+
     def _build_mod(
         self,
         requested: ModID,
@@ -353,6 +398,8 @@ class SteamClient(ProviderClient):
             id=str(requested.id),
             game=str(game_id) if game_id is not None else None,
         )
+        latest_version = self._build_latest_version(mod_key, details, updated_at=updated_at)
+        latest_version_id = latest_version.version if latest_version is not None else None
 
         description_value = None
         if description is not None:
@@ -369,7 +416,8 @@ class SteamClient(ProviderClient):
             tags=tags,
             created_at=created_at,
             updated_at=updated_at,
-            latest_version_id=None,
+            latest_version_id=latest_version_id,
+            latest_version=latest_version,
             raw=dict(details),
         )
 

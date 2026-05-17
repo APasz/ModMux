@@ -140,6 +140,44 @@ class TestSteamClient(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(mod.created_at)
         self.assertIsNotNone(mod.updated_at)
 
+    async def test_get_mod_populates_latest_version_files_when_exposed(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "response": {
+                        "publishedfiledetails": [
+                            {
+                                "result": 1,
+                                "publishedfileid": "123",
+                                "filename": "city-pack.zip",
+                                "file_size": 4096,
+                                "hcontent_file": "ugc-123",
+                                "revision_change_number": 77,
+                                "time_updated": "2023-01-02T00:00:00Z",
+                                "creator": "author1",
+                                "title": "City Pack",
+                            }
+                        ]
+                    }
+                },
+                request=request,
+            )
+
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = SteamClient(None, http=http)
+            mod = await client.get_mod(ModID(provider=Provider.STEAM, id="123"))
+
+        self.assertEqual(mod.latest_version_id, "77")
+        self.assertIsNotNone(mod.latest_version)
+        assert mod.latest_version is not None
+        self.assertEqual(mod.latest_version.name, "city-pack.zip")
+        self.assertEqual(mod.latest_version.version, "77")
+        self.assertEqual([file.file_id for file in mod.latest_version.files], ["ugc-123"])
+        self.assertEqual(mod.latest_version.files[0].filename, "city-pack.zip")
+        self.assertEqual(mod.latest_version.files[0].size_bytes, 4096)
+
     async def test_get_mod_skips_author_lookup_by_default(self) -> None:
         calls: dict[str, int] = {"details": 0, "user": 0}
 

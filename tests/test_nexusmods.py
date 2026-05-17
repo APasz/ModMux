@@ -35,6 +35,28 @@ class TestNexusmodsClient(unittest.IsolatedAsyncioTestCase):
                     "version": "5.2",
                 }
                 return httpx.Response(200, json=payload, request=request)
+            if request.url.path.endswith("/games/skyrim/mods/123/files.json"):
+                payload = {
+                    "files": [
+                        {
+                            "file_id": 500,
+                            "file_name": "skyui_5_2.zip",
+                            "size": 4096,
+                            "uploaded_time": "2023-01-02T00:00:00Z",
+                            "version": "5.2",
+                            "category_name": "MAIN",
+                        },
+                        {
+                            "file_id": 499,
+                            "file_name": "skyui_5_1.zip",
+                            "size": 2048,
+                            "uploaded_time": "2022-12-31T00:00:00Z",
+                            "version": "5.1",
+                            "category_name": "OLD",
+                        },
+                    ]
+                }
+                return httpx.Response(200, json=payload, request=request)
             return httpx.Response(404, request=request)
 
         transport = httpx.MockTransport(handler)
@@ -51,6 +73,12 @@ class TestNexusmodsClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mod.tags, ["Utilities", "ui", "skse"])
         self.assertEqual(mod.latest_version_id, "5.2")
         self.assertEqual(str(mod.homepage), "https://www.nexusmods.com/skyrim/mods/123")
+        self.assertIsNotNone(mod.latest_version)
+        assert mod.latest_version is not None
+        self.assertEqual(mod.latest_version.version, "5.2")
+        self.assertEqual([file.file_id for file in mod.latest_version.files], ["500"])
+        self.assertEqual(mod.latest_version.files[0].filename, "skyui_5_2.zip")
+        self.assertEqual(mod.latest_version.files[0].size_bytes, 4096)
         self.assertIsNotNone(mod.created_at)
         self.assertIsNotNone(mod.updated_at)
 
@@ -59,3 +87,53 @@ class TestNexusmodsClient(unittest.IsolatedAsyncioTestCase):
             client = NexusmodsClient(None, http=http)
             with self.assertRaises(ValueError):
                 await client.get_mod(ModID(provider=Provider.NEXUSMODS, id="123"))
+
+    async def test_get_mod_leaves_files_empty_when_versions_do_not_match(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/games/skyrim/mods/123.json"):
+                return httpx.Response(
+                    200,
+                    json={
+                        "name": "SkyUI",
+                        "author": "schlangster",
+                        "user_id": 11,
+                        "version": "5.2",
+                    },
+                    request=request,
+                )
+            if request.url.path.endswith("/games/skyrim/mods/123/files.json"):
+                return httpx.Response(
+                    200,
+                    json={
+                        "files": [
+                            {
+                                "file_id": 500,
+                                "file_name": "skyui_main.zip",
+                                "size": 4096,
+                                "uploaded_time": "2023-01-02T00:00:00Z",
+                                "version": "legacy",
+                                "category_name": "MAIN",
+                            },
+                            {
+                                "file_id": 501,
+                                "file_name": "skyui_archived.zip",
+                                "size": 1024,
+                                "uploaded_time": "2022-01-01T00:00:00Z",
+                                "version": "legacy",
+                                "category_name": "ARCHIVED",
+                            },
+                        ]
+                    },
+                    request=request,
+                )
+            return httpx.Response(404, request=request)
+
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = NexusmodsClient(None, http=http)
+            mod = await client.get_mod(ModID(provider=Provider.NEXUSMODS, id="123", game="skyrim"))
+
+        self.assertIsNotNone(mod.latest_version)
+        assert mod.latest_version is not None
+        self.assertEqual(mod.latest_version.version, "5.2")
+        self.assertEqual(mod.latest_version.files, [])
