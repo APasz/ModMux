@@ -125,7 +125,7 @@ def _empty_repo_payload() -> dict[str, object]:
 
 
 def _json_handler(
-    routes: Mapping[str, dict[str, object]],
+    routes: Mapping[str, dict[str, object] | str],
     requested_paths: list[str] | None = None,
 ) -> Callable[[httpx.Request], httpx.Response]:
     def handler(request: httpx.Request) -> httpx.Response:
@@ -134,6 +134,8 @@ def _json_handler(
         payload = routes.get(request.url.path)
         if payload is None:
             return httpx.Response(404, request=request)
+        if isinstance(payload, str):
+            return httpx.Response(200, text=payload, request=request)
         return httpx.Response(200, json=payload, request=request)
 
     return handler
@@ -186,6 +188,31 @@ _ENTRY_HTML = """
             <dl>
                 <dt>Aktuelle Version</dt>
                 <dd class="htmlContent">1.0</dd>
+                <dt>Benötigte Modifikationen</dt>
+                <dd class="htmlContent">
+                    <ul class="row">
+                        <li class="box32 col-md-4">
+                            <a href="https://www.transportfever.net/filebase/entry/7000-other-mod/" target="_blank">
+                                <i class="icon icon24 fa-puzzle-piece"></i>
+                            </a>
+                            <div>
+                                <p>
+                                    <a
+                                        href="https://www.transportfever.net/filebase/entry/7000-other-mod/"
+                                        target="_blank"
+                                    >
+                                        Other Mod
+                                    </a>
+                                </p>
+                                <small>(
+                                    <a href="https://www.transportfever.net/wsc/user/55-other/" data-user-id="55">
+                                        OtherAuthor
+                                    </a>
+                                )</small>
+                            </div>
+                        </li>
+                    </ul>
+                </dd>
             </dl>
         </section>
         <div class="filebaseFileList">
@@ -301,7 +328,6 @@ class TestTransportfevernetClient(unittest.IsolatedAsyncioTestCase):
                     ModID(provider=Provider.TRANSPORTFEVERNET, id="7867", game="tf2"),
                 ]
             )
-
         self.assertEqual(requested_paths, ["/filebase/repos/tpf1.json", "/filebase/repos/tpf2.json"])
         self.assertEqual(mods[0].id.game, "tpf1")
         self.assertEqual(mods[1].id.game, "tpf2")
@@ -322,7 +348,6 @@ class TestTransportfevernetClient(unittest.IsolatedAsyncioTestCase):
         ) as http:
             client = TransportfevernetClient(None, http=http)
             mod = await client.get_mod(ModID(provider=Provider.TRANSPORTFEVERNET, id="1234"))
-
         self.assertEqual(requested_paths, ["/filebase/repos/tpf2.json", "/filebase/repos/tpf1.json"])
         self.assertEqual(mod.id, ModID(provider=Provider.TRANSPORTFEVERNET, id="1234"))
         self.assertEqual(mod.name.value, "Classic Station")
@@ -426,3 +451,51 @@ class TestTransportfevernetClient(unittest.IsolatedAsyncioTestCase):
         assert mod.latest_version is not None
         self.assertEqual(mod.latest_version.files[0].file_id, "17001")
         self.assertEqual(mod.latest_version.files[0].filename, "Smart Town Development 1.0.zip")
+
+    async def test_get_mod_uses_redirect_response_body_when_entry_returns_302(self) -> None:
+        requested_paths: list[str] = []
+        clean_name = "Demo-Anlage für Autobahn mit unterirdischen Spawnpoints/Besuchermagneten"
+        entry_html = _ENTRY_HTML.replace("8010", "8012").replace("Smart Town Development", clean_name)
+        entry_html = entry_html.replace(
+            f'<h1 class="contentTitle"><span itemprop="name headline">{clean_name}</span></h1>',
+            (
+                f'<h1 class="contentTitle"><span itemprop="name headline">{clean_name}</span>'
+                '<span class="badge">Neu</span></h1>'
+            ),
+        )
+        entry_html = entry_html.replace(
+            '<div class="filebaseFileList">',
+            '<div class="filebaseFileList"><a href="https://www.transportfever.net/filebase/entry-download/8012-demo-anlage-f%C3%BCr-autobahn-mit-unterirdischen-spawnpoints-besuchermagneten/">Herunterladen</a>',
+        )
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requested_paths.append(f"{request.method} {request.url.path}")
+            if request.url.path == "/filebase/repos/tpf2.json":
+                return httpx.Response(200, json=_empty_repo_payload(), request=request)
+            if request.url.path == "/filebase/repos/tpf1.json":
+                return httpx.Response(200, json=_empty_repo_payload(), request=request)
+            if request.url.path == "/filebase/entry/8012/":
+                return httpx.Response(
+                    302,
+                    text=entry_html,
+                    headers={"Location": "/filebase/terms-of-use/?redirect=%2Ffilebase%2Fentry%2F8012%2F"},
+                    request=request,
+                )
+            return httpx.Response(404, request=request)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            client = TransportfevernetClient(None, http=http)
+            mod = await client.get_mod(ModID(provider=Provider.TRANSPORTFEVERNET, id="8012"))
+
+        self.assertEqual(
+            requested_paths,
+            [
+                "GET /filebase/repos/tpf2.json",
+                "GET /filebase/repos/tpf1.json",
+                "GET /filebase/entry/8012/",
+            ],
+        )
+        self.assertEqual(mod.id.id, "8012")
+        self.assertEqual(mod.name.value, clean_name)
+        assert mod.latest_version is not None
+        self.assertEqual([file.file_id for file in mod.latest_version.files], ["17001"])

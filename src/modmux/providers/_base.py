@@ -173,6 +173,8 @@ class ProviderClient(abc.ABC):
         headers: Mapping[str, str] | None = None,
         timeout: float | httpx.Timeout | None = None,
         max_attempts: int = 2,
+        follow_redirects: bool = False,
+        allowed_status_codes: Sequence[int] = (),
     ) -> httpx.Response:
         """Perform a rate-limited GET with retries and error mapping.
 
@@ -182,6 +184,8 @@ class ProviderClient(abc.ABC):
             headers: Optional headers to merge with auth headers.
             timeout: Optional request timeout.
             max_attempts: Maximum request attempts on retryable failures.
+            follow_redirects: Whether to follow HTTP redirects.
+            allowed_status_codes: Extra HTTP status codes to treat as successful.
 
         Returns;
             The successful HTTP response.
@@ -217,9 +221,10 @@ class ProviderClient(abc.ABC):
                         params=req_params,
                         headers=req_headers,
                         timeout=effective_timeout,
+                        follow_redirects=follow_redirects,
                     )
 
-                if 200 <= response.status_code < 300:
+                if 200 <= response.status_code < 300 or response.status_code in allowed_status_codes:
                     return response
 
                 sc = response.status_code

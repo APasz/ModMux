@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+## 0.6.1
+
+### Fixed
+- Fix transportfever.net HTML fallback when live filebase entries return `302 Found` responses with entry markup in the response body.
+- Prefer transportfever.net metadata titles for HTML fallback results so entry badges like `Neu` do not leak into mod names.
+
 ## 0.6.0
 
 ### Changed

@@ -33,6 +33,7 @@ _DEFAULT_ENTRY_PREFIX_URL = "https://www.transportfever.net/filebase/entry/"
 _ENTRY_PATH = "filebase/entry/{entry_id}/"
 _TERMS_PATH = "filebase/terms-of-use/"
 _SITE_TITLE_SUFFIX = " - Transport Fever Community"
+_REDIRECT_STATUS_CODES: tuple[int, ...] = (301, 302, 303, 307, 308)
 
 
 class TransportfeverGame(StrEnum):
@@ -231,6 +232,10 @@ def _is_terms_page(html: str) -> bool:
     return 'id="tpl_filebase_termsOfUse"' in html or 'data-template="termsOfUse"' in html
 
 
+def _is_redirect_status(status_code: int) -> bool:
+    return status_code in _REDIRECT_STATUS_CODES
+
+
 def _file_id_from_download(value: object | None) -> str | None:
     if value is None:
         return None
@@ -242,6 +247,10 @@ def _file_id_from_download(value: object | None) -> str | None:
     if path_parts:
         return _leading_numeric_id(path_parts[-1]) or path_parts[-1]
     return None
+
+
+def _query_file_id(value: str) -> str | None:
+    return _file_id_from_download(value) if "fileID=" in value else None
 
 
 def _filename_for(entry: TransportfeverFileEntry, file_id: str) -> str:
@@ -447,7 +456,7 @@ class _TransportfeverEntryHtmlParser(HTMLParser):
         href = self._current_file_href
         if href is None:
             return
-        file_id = _file_id_from_download(href)
+        file_id = _query_file_id(href)
         if file_id is None:
             return
 
@@ -460,8 +469,8 @@ class _TransportfeverEntryHtmlParser(HTMLParser):
         self.files[file_id] = TransportfeverHtmlFile(file_id=file_id, filename=filename, download_url=href)
 
     def to_entry(self, fallback_entry_id: str) -> TransportfeverHtmlEntry | None:
-        name = _site_title(" ".join(self._content_title_parts))
-        name = name or _site_title(self.meta.get("og:title")) or _site_title(" ".join(self._title_parts))
+        name = _site_title(self.meta.get("og:title")) or _site_title(" ".join(self._title_parts))
+        name = name or _site_title(" ".join(self._content_title_parts))
         if name is None:
             return None
 
@@ -562,14 +571,24 @@ class TransportfevernetClient(ProviderClient):
 
     async def _fetch_entry_page(self, entry_id: str) -> str:
         path = _ENTRY_PATH.format(entry_id=entry_id)
-        response = await self._get(path)
+        response = await self._get(path, allowed_status_codes=_REDIRECT_STATUS_CODES)
         html = response.text
+        if _is_redirect_status(response.status_code) and not html.strip():
+            location = response.headers.get("Location")
+            if location:
+                response = await self._get(location, allowed_status_codes=_REDIRECT_STATUS_CODES)
+                html = response.text
         if not _is_terms_page(html):
             return html
 
         await self._accept_terms(html, fallback_redirect=f"/{path}")
-        response = await self._get(path)
+        response = await self._get(path, allowed_status_codes=_REDIRECT_STATUS_CODES)
         html = response.text
+        if _is_redirect_status(response.status_code) and not html.strip():
+            location = response.headers.get("Location")
+            if location:
+                response = await self._get(location, allowed_status_codes=_REDIRECT_STATUS_CODES)
+                html = response.text
         if _is_terms_page(html):
             raise ProviderError(f"{self.name}: filebase terms gate could not be accepted")
         return html
@@ -595,13 +614,17 @@ class TransportfevernetClient(ProviderClient):
         if not entry_id.isdigit():
             raise not_found
 
+        entry = await self._fetch_html_entry_data(entry_id)
+        return self._build_html_mod(entry, game=game)
+
+    async def _fetch_html_entry_data(self, entry_id: str) -> TransportfeverHtmlEntry:
         html = await self._fetch_entry_page(entry_id)
         parser = _TransportfeverEntryHtmlParser()
         parser.feed(html)
         entry = parser.to_entry(entry_id)
         if entry is None:
             raise ProviderError(f"{self.name}: entry page did not contain mod metadata")
-        return self._build_html_mod(entry, game=game)
+        return entry
 
     async def _resolve_mod(
         self,

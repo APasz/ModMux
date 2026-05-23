@@ -122,7 +122,12 @@ class NexusmodsClient(ProviderClient):
     def __init__(self, creds: NexusCreds | None, *, http: AsyncClient, cache: object | None = None) -> None:
         super().__init__(creds, http=http, cache=cache)
 
-    def _build_latest_version(self, mod_key: ModID, mod_payload: Mapping[str, object], files_payload: object) -> ModVersion | None:
+    def _build_latest_version(
+        self,
+        mod_key: ModID,
+        mod_payload: Mapping[str, object],
+        files_payload: object,
+    ) -> ModVersion | None:
         selected_files = _select_latest_file_payloads(mod_payload, files_payload)
         latest_files = [asset for entry in selected_files if (asset := _build_file_asset(entry)) is not None]
 
