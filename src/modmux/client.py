@@ -7,15 +7,12 @@ from types import TracebackType
 import httpx
 
 from . import providers
-from ._log import get_logger
 from .cache import ModioLookupCache
-from .models import Author, LocaleTag, Mod, ModID, Provider, ProviderCreds
+from .models import Author, DownloadInfo, LocaleTag, Mod, ModID, Provider, ProviderCreds
 from .providers._base import ProviderClient
 from .toggles import ToggleMode, UndefinedType, resolve_toggle
 from .utils.discovery import REGISTRY, load_providers
 from .utils.urls import parse_url
-
-log = get_logger()
 
 
 class Muxer:
@@ -74,10 +71,7 @@ class Muxer:
             tokens: dict[Provider, ProviderCreds | dict | None] = {}
             for item in creds:
                 if not isinstance(item, ProviderCreds):
-                    raise TypeError(
-                        "Credential sequences must contain ProviderCreds instances, "
-                        f"got {type(item)!r}"
-                    )
+                    raise TypeError(f"Credential sequences must contain ProviderCreds instances, got {type(item)!r}")
                 provider = item.provider
                 if provider in tokens:
                     raise ValueError(f"Duplicate credentials for provider: {provider}")
@@ -163,6 +157,32 @@ class Muxer:
         should_enrich_author = resolve_toggle(author_resolution, default=False)
         next_mode = ToggleMode.ON if should_enrich_author else ToggleMode.OFF
         return await self._p(provider).get_mods(ids, locales=locales, author_resolution=next_mode)
+
+    async def resolve_download(
+        self,
+        provider: Provider,
+        mod_id: ModID,
+        file_id: str,
+    ) -> DownloadInfo:
+        """Resolve a release file to its current provider access details.
+
+        Some providers mint short-lived direct URLs only when requested. Others
+        return the access descriptor already present in release metadata.
+
+        Args:
+            provider: Provider to query.
+            mod_id: Provider-specific mod identifier.
+            file_id: Provider-specific release file identifier.
+
+        Returns:
+            Current access details for the requested release file.
+
+        Raises:
+            ValueError: If the ModID provider does not match the target provider.
+        """
+        if mod_id.provider != provider:
+            raise ValueError(f"ModID.provider must match {provider}, got {mod_id.provider}")
+        return await self._p(provider).resolve_download(mod_id, file_id)
 
     async def get_user(self, provider: Provider, user_id: str) -> Author:
         """Fetch a user using the configured provider client.

@@ -4,9 +4,23 @@ import sys
 import unittest
 from pathlib import Path
 
+from pydantic import ValidationError
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from modmux.models import Author, Dependency, DependencyRelation, LocalisedText, Mod, ModID, ModVersion, Provider
+from modmux.models import (
+    Author,
+    Dependency,
+    DependencyRelation,
+    DownloadAccess,
+    DownloadInfo,
+    FileAsset,
+    LocalisedText,
+    Mod,
+    ModID,
+    ModVersion,
+    Provider,
+)
 from modmux.providers.modrinth import ModrinthCreds
 
 
@@ -36,6 +50,16 @@ class TestModels(unittest.TestCase):
 
         self.assertEqual(dependency.relation, DependencyRelation.REQUIRED)
 
+    def test_file_asset_defaults_to_unavailable_download(self) -> None:
+        asset = FileAsset(file_id="file-1", filename="file.zip")
+
+        self.assertEqual(asset.download.access, DownloadAccess.UNAVAILABLE)
+        self.assertIsNone(asset.download.url)
+
+    def test_download_info_rejects_url_for_resolvable_access(self) -> None:
+        with self.assertRaises(ValidationError):
+            DownloadInfo.model_validate({"access": DownloadAccess.RESOLVABLE, "url": "https://example.com/file.zip"})
+
     def test_provider_enum(self) -> None:
         self.assertEqual(Provider("MODRINTH"), Provider.MODRINTH)
 
@@ -45,3 +69,9 @@ class TestModels(unittest.TestCase):
 
         self.assertIsInstance(hash(creds), int)
         self.assertEqual(hash(creds), hash(same_creds))
+
+    def test_localised_text_is_not_hashable_with_mutable_translations(self) -> None:
+        text = LocalisedText(value="Name", translations={"en": "Name"})
+
+        with self.assertRaises(TypeError):
+            hash(text)

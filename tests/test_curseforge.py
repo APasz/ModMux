@@ -8,8 +8,8 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from modmux.models import DependencyRelation, ModID, Provider
-from modmux.providers.curseforge import CurseforgeClient
+from modmux.models import DependencyRelation, DownloadAccess, ModID, Provider
+from modmux.providers.curseforge import CurseforgeClient, CurseforgeCreds
 
 
 def _ok_transport() -> httpx.MockTransport:
@@ -56,6 +56,7 @@ class TestCurseforgeClient(unittest.IsolatedAsyncioTestCase):
                                     "fileName": "jei.jar",
                                     "fileDate": "2023-01-03T00:00:00Z",
                                     "fileLength": 1234,
+                                    "downloadUrl": "https://edge.forgecdn.net/files/12/34/jei.jar",
                                     "gameVersions": ["1.19.2"],
                                     "dependencies": [
                                         {"modId": 6, "relationType": 1},
@@ -91,6 +92,8 @@ class TestCurseforgeClient(unittest.IsolatedAsyncioTestCase):
         assert mod.latest_version is not None
         self.assertEqual(mod.latest_version.version, "99")
         self.assertEqual(mod.latest_version.files[0].filename, "jei.jar")
+        self.assertEqual(mod.latest_version.files[0].download.access, DownloadAccess.DIRECT)
+        self.assertTrue(mod.latest_version.files[0].download.requires_authentication)
         self.assertEqual(mod.latest_version.game_versions, ["1.19.2"])
         self.assertEqual(
             [dependency.id.id for dependency in mod.latest_version.dependencies],
@@ -113,6 +116,24 @@ class TestCurseforgeClient(unittest.IsolatedAsyncioTestCase):
             client = CurseforgeClient(None, http=http)
             with self.assertRaises(ValueError):
                 await client.get_mod(ModID(provider=Provider.CURSEFORGE, id="jei"))
+
+    async def test_resolve_download_mints_direct_url(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            self.assertEqual(request.url.path, "/v1/mods/238222/files/99/download-url")
+            self.assertEqual(request.headers["x-api-key"], "token")
+            return httpx.Response(
+                200,
+                json={"data": "https://edge.forgecdn.net/files/12/34/jei.jar"},
+                request=request,
+            )
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            client = CurseforgeClient(CurseforgeCreds.model_validate({"token": "token"}), http=http)
+            download = await client.resolve_download(ModID(provider=Provider.CURSEFORGE, id="238222"), "99")
+
+        self.assertEqual(download.access, DownloadAccess.DIRECT)
+        self.assertEqual(str(download.url), "https://edge.forgecdn.net/files/12/34/jei.jar")
+        self.assertTrue(download.requires_authentication)
 
     async def test_get_mods_batches_same_game_and_falls_back_without_game(self) -> None:
         calls: dict[str, int] = {"search": 0, "batch": 0, "single": 0}

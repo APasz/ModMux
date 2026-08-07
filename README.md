@@ -125,6 +125,38 @@ async with Muxer() as mux:
     mods = await mux.get_mods(Provider.STEAM, mod_ids)
 ```
 
+## Release file access
+
+Each `FileAsset` has a typed `download` descriptor. It tells the caller whether
+the provider has supplied a direct URL, a browser-oriented URL, or whether the
+file needs a provider-specific resolution request first.
+
+```python
+from modmux import DownloadAccess
+
+file = mod.latest_version.files[0]
+if file.download.access is DownloadAccess.DIRECT:
+    print(file.download.url)
+```
+
+Use `Muxer.resolve_download()` when a file is marked `RESOLVABLE`, or when you
+need a fresh provider URL. CurseForge, Nexus Mods, and mod.io resolve to direct
+(usually short-lived) URLs; Factorio checks that a username/token pair is
+configured but returns a credential-free `WEB` URL so secrets are never
+serialised.
+For Factorio, callers add the values from `WubeCreds.download_params()` when
+requesting that URL.
+
+```python
+download = await mux.resolve_download(mod.provider, mod.id, file.file_id)
+if download.access is DownloadAccess.DIRECT:
+    print(download.url)
+```
+
+`download.requires_authentication` indicates that the caller must supply its
+own provider credentials. `download.expires_at` is populated for temporary
+direct links. ModMux does not download or stream file bytes yet.
+
 ## URL parsing
 Parse provider URLs into `ModID` instances, or fetch directly from a URL.
 

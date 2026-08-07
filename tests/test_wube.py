@@ -8,9 +8,9 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from modmux.models import DependencyRelation, ModID, Provider
-from modmux.modmux_errors import ProviderError
-from modmux.providers.wube import WubeClient
+from modmux.models import DependencyRelation, DownloadAccess, ModID, Provider
+from modmux.modmux_errors import AuthError, ProviderError
+from modmux.providers.wube import WubeClient, WubeCreds
 
 
 class TestWubeClient(unittest.IsolatedAsyncioTestCase):
@@ -30,6 +30,7 @@ class TestWubeClient(unittest.IsolatedAsyncioTestCase):
                             "version": "1.1.0",
                             "released_at": "2023-01-02T00:00:00Z",
                             "file_name": "space-exploration_1.1.0.zip",
+                            "download_url": "/download/space-exploration_1.1.0.zip",
                             "info_json": {
                                 "dependencies": [
                                     "base >= 1.1",
@@ -60,6 +61,8 @@ class TestWubeClient(unittest.IsolatedAsyncioTestCase):
         assert mod.latest_version is not None
         self.assertEqual(mod.latest_version.version, "1.1.0")
         self.assertEqual(mod.latest_version.files[0].filename, "space-exploration_1.1.0.zip")
+        self.assertEqual(mod.latest_version.files[0].download.access, DownloadAccess.WEB)
+        self.assertTrue(mod.latest_version.files[0].download.requires_authentication)
         self.assertEqual(
             [dependency.id.id for dependency in mod.latest_version.dependencies],
             ["base", "alien-biomes", "old-conflict"],
@@ -83,3 +86,37 @@ class TestWubeClient(unittest.IsolatedAsyncioTestCase):
             client = WubeClient(None, http=http)
             with self.assertRaises(ProviderError):
                 await client.get_mod(ModID(provider=Provider.WUBE, id="space-exploration"))
+
+    async def test_resolve_download_requires_username_and_token(self) -> None:
+        payload = {
+            "name": "space-exploration",
+            "title": "Space Exploration",
+            "owner": "Earendel",
+            "releases": [
+                {
+                    "version": "1.1.0",
+                    "file_name": "space-exploration_1.1.0.zip",
+                    "download_url": "/download/space-exploration_1.1.0.zip",
+                }
+            ],
+        }
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            self.assertEqual(request.url.params, httpx.QueryParams())
+            return httpx.Response(200, json=payload, request=request)
+
+        transport = httpx.MockTransport(handler)
+        mod_id = ModID(provider=Provider.WUBE, id="space-exploration")
+
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = WubeClient(WubeCreds.model_validate({"token": "token", "user": "alice"}), http=http)
+            download = await client.resolve_download(mod_id, "1.1.0")
+
+        self.assertEqual(download.access, DownloadAccess.WEB)
+        self.assertEqual(str(download.url), "https://mods.factorio.com/download/space-exploration_1.1.0.zip")
+        self.assertTrue(download.requires_authentication)
+
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = WubeClient(WubeCreds.model_validate({"token": "token"}), http=http)
+            with self.assertRaises(AuthError):
+                await client.resolve_download(mod_id, "1.1.0")

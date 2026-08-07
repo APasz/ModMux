@@ -7,17 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## 0.7.0
+
 ### Added
+- Add typed per-file download access metadata, including provider URLs,
+  authentication requirements, and direct-link expiry timestamps where supplied.
+- Add `Muxer.resolve_download()` for obtaining current provider download access,
+  including fresh direct URLs from CurseForge, Nexus Mods, and mod.io.
 
 ### Changed
+- Require third-party `ProviderClient` subclasses to implement `get_mod()`.
+- Make `LocalisedText` and `ModSummary` unhashable because their translation
+  mappings remain mutable.
 
 ### Fixed
+- Expose Factorio download credentials as the required `username` and `token`
+  query parameters without adding them to public metadata requests.
+- Map all HTTPX transport errors to `ProviderError` consistently.
+- Preserve existing cache entries when updating a key at capacity and reject
+  non-positive cache sizes.
+- Raise `NotFound` when Steam returns no user matching the requested Steam ID.
 
 ### Deprecated
 
 ### Removed
 
 ### Security
+- Prevent CLI logging from exposing authenticated HTTP request URLs.
 
 ## 0.6.1
 

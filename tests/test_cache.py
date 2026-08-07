@@ -35,6 +35,19 @@ class TestAsyncTTLCache(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(await cache.get("first"))
         self.assertEqual(await cache.get("second"), "b")
 
+    async def test_replacing_existing_value_does_not_evict_another_key(self) -> None:
+        cache = AsyncTTLCache(ttl=None, maxsize=2)
+        await cache.set("first", "a")
+        await cache.set("second", "b")
+        await cache.set("second", "updated")
+
+        self.assertEqual(await cache.get("first"), "a")
+        self.assertEqual(await cache.get("second"), "updated")
+
+    def test_maxsize_must_be_positive(self) -> None:
+        with self.assertRaises(ValueError):
+            AsyncTTLCache(maxsize=0)
+
     async def test_get_or_set_caches_none_values(self) -> None:
         cache = AsyncTTLCache(ttl=None, maxsize=4)
         calls = 0

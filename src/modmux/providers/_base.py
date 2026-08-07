@@ -4,19 +4,15 @@ import abc
 import asyncio
 import random
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from aiolimiter import AsyncLimiter
-from httpx import RemoteProtocolError
 
-from .._log import get_logger
-from ..models import Author, LocaleTag, Mod, ModID, Provider, ProviderCreds
+from ..models import Author, DownloadAccess, DownloadInfo, LocaleTag, Mod, ModID, Provider, ProviderCreds
 from ..modmux_errors import AuthError, NotFound, ProviderError, RateLimited
 from ..toggles import ToggleMode, UndefinedType
 from .colour import Colour
-
-log = get_logger("base")
 
 
 class ProviderClient(abc.ABC):
@@ -41,13 +37,14 @@ class ProviderClient(abc.ABC):
         self.limiter = AsyncLimiter(5, 1)
         self.cache = cache
 
+    @abc.abstractmethod
     async def get_mod(
         self,
         mod_id: ModID,
         *,
         locales: list[LocaleTag] | None = None,
         author_resolution: ToggleMode | bool | UndefinedType = ToggleMode.AUTO,
-    ) -> Mod:  # * override per provider
+    ) -> Mod:
         """Fetch a mod by provider-specific identifier.
 
         Args;
@@ -58,7 +55,7 @@ class ProviderClient(abc.ABC):
         Returns;
             A normalised Mod instance.
         """
-        ...
+        raise NotImplementedError
 
     async def get_mods(
         self,
@@ -83,11 +80,41 @@ class ProviderClient(abc.ABC):
         if not mod_ids:
             return []
         return await asyncio.gather(
-            *(
-                self.get_mod(mod_id, locales=locales, author_resolution=author_resolution)
-                for mod_id in mod_ids
-            )
+            *(self.get_mod(mod_id, locales=locales, author_resolution=author_resolution) for mod_id in mod_ids)
         )
+
+    async def resolve_download(self, mod_id: ModID, file_id: str) -> DownloadInfo:
+        """Return or resolve access details for a release file.
+
+        Providers that mint a fresh URL override this method. The default uses
+        the matching latest-version file descriptor when that descriptor is
+        already usable.
+
+        Args:
+            mod_id: Provider-specific mod identifier.
+            file_id: Provider-specific release file identifier.
+
+        Returns:
+            Current release-file access details.
+
+        Raises:
+            NotFound: If the requested file is not part of the latest version.
+            ProviderError: If the provider needs a custom resolution request.
+        """
+        mod = await self.get_mod(mod_id)
+        latest_version = mod.latest_version
+        if latest_version is None:
+            raise NotFound(f"{self.name}: file {file_id!r} not found for mod {mod_id.id!r}")
+
+        requested_file_id = str(file_id).strip()
+        for asset in latest_version.files:
+            if asset.file_id != requested_file_id:
+                continue
+            if asset.download.access is DownloadAccess.RESOLVABLE:
+                raise ProviderError(f"{self.name}: download resolution is not implemented for file {file_id!r}")
+            return asset.download
+
+        raise NotFound(f"{self.name}: file {file_id!r} not found for mod {mod_id.id!r}")
 
     async def get_user(self, user_id: str) -> Author:
         """Fetch a provider user by id.
@@ -165,6 +192,93 @@ class ProviderClient(abc.ABC):
             base = self.creds.format_base(base)
         return f"{base.rstrip('/')}/{path_or_url.lstrip('/')}"
 
+    async def _request(
+        self,
+        method: Literal["GET", "POST"],
+        path_or_url: str,
+        *,
+        params: Mapping[str, Any] | None = None,
+        headers: Mapping[str, str] | None = None,
+        data: Mapping[str, Any] | None = None,
+        json: Any | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        max_attempts: int = 2,
+        follow_redirects: bool = False,
+        allowed_status_codes: Sequence[int] = (),
+    ) -> httpx.Response:
+        """Perform a rate-limited request with retries and error mapping."""
+        if max_attempts < 1:
+            raise ValueError("max_attempts must be at least 1")
+
+        url = self._abs_url(path_or_url)
+        request_headers = self._auth_headers()
+        if headers:
+            request_headers.update(headers)
+
+        request_params: dict[str, Any] = self._auth_params()
+        if params:
+            request_params.update(params)
+
+        for attempt in range(max_attempts):
+            try:
+                async with self.limiter:
+                    if method == "GET":
+                        response = await self.http.get(
+                            url,
+                            params=request_params or None,
+                            headers=request_headers,
+                            timeout=timeout,
+                            follow_redirects=follow_redirects,
+                        )
+                    else:
+                        response = await self.http.post(
+                            url,
+                            params=request_params or None,
+                            headers=request_headers,
+                            data=data,
+                            json=json,
+                            timeout=timeout,
+                            follow_redirects=follow_redirects,
+                        )
+
+                if 200 <= response.status_code < 300 or response.status_code in allowed_status_codes:
+                    return response
+
+                status_code = response.status_code
+                if status_code in (401, 403):
+                    raise AuthError(f"{self.name}: {status_code} on {method} {url}")
+                if status_code == 404:
+                    raise NotFound(f"{self.name}: 404 on {method} {url}")
+                if status_code == 429:
+                    if attempt < max_attempts - 1:
+                        retry_after = response.headers.get("Retry-After")
+                        try:
+                            delay = float(retry_after) if retry_after is not None else 1.0
+                        except ValueError:
+                            delay = 1.0
+                        await asyncio.sleep(delay + random.uniform(0, 0.25))
+                        continue
+                    raise RateLimited(f"{self.name}: 429 on {method} {url}")
+                if 500 <= status_code < 600:
+                    if attempt < max_attempts - 1:
+                        await asyncio.sleep(0.5 * (2**attempt) + random.uniform(0, 0.25))
+                        continue
+                    raise ProviderError(f"{self.name}: {status_code} on {method} {url}")
+
+                try:
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    raise ProviderError(f"{self.name}: {exc}") from exc
+                return response
+
+            except httpx.TransportError as exc:
+                if attempt < max_attempts - 1:
+                    await asyncio.sleep(0.3 + random.uniform(0, 0.2))
+                    continue
+                raise ProviderError(f"{self.name}: transport error on {method} {url}") from exc
+
+        raise ProviderError(f"{self.name}: {method} {url} failed for unknown reasons")
+
     async def _get(
         self,
         path_or_url: str,
@@ -176,94 +290,17 @@ class ProviderClient(abc.ABC):
         follow_redirects: bool = False,
         allowed_status_codes: Sequence[int] = (),
     ) -> httpx.Response:
-        """Perform a rate-limited GET with retries and error mapping.
-
-        Args;
-            path_or_url: Relative path or absolute URL to request.
-            params: Optional query parameters.
-            headers: Optional headers to merge with auth headers.
-            timeout: Optional request timeout.
-            max_attempts: Maximum request attempts on retryable failures.
-            follow_redirects: Whether to follow HTTP redirects.
-            allowed_status_codes: Extra HTTP status codes to treat as successful.
-
-        Returns;
-            The successful HTTP response.
-
-        Raises;
-            AuthError: If authentication fails.
-            NotFound: If the resource is not found.
-            RateLimited: If retries are exhausted after rate limiting.
-            ProviderError: For other provider or transport failures.
-        """
-        url = self._abs_url(path_or_url)
-        req_headers: dict[str, str] = self._auth_headers()
-        if headers:
-            req_headers.update(headers)
-
-        req_params: dict[str, Any] | None = {}
-        auth_params = self._auth_params()
-        if auth_params:
-            req_params.update(auth_params)
-        if params:
-            req_params.update(params)
-        if not req_params:
-            req_params = None
-
-        effective_timeout = timeout
-
-        last_exc: Exception | None = None
-        for attempt in range(max_attempts):
-            try:
-                async with self.limiter:
-                    response = await self.http.get(
-                        url,
-                        params=req_params,
-                        headers=req_headers,
-                        timeout=effective_timeout,
-                        follow_redirects=follow_redirects,
-                    )
-
-                if 200 <= response.status_code < 300 or response.status_code in allowed_status_codes:
-                    return response
-
-                sc = response.status_code
-                if sc in (401, 403):
-                    raise AuthError(f"{self.name}: {sc} on GET {url}")
-                if sc == 404:
-                    raise NotFound(f"{self.name}: 404 on GET {url}")
-                if sc == 429:
-                    if attempt < max_attempts - 1:
-                        retry_after = response.headers.get("Retry-After")
-                        try:
-                            delay = float(retry_after) if retry_after is not None else 1.0
-                        except ValueError:
-                            delay = 1.0
-                        await asyncio.sleep(delay + random.uniform(0, 0.25))
-                        continue
-                    raise RateLimited(f"{self.name}: 429 on GET {url}")
-                if 500 <= sc < 600:
-                    if attempt < max_attempts - 1:
-                        await asyncio.sleep(0.5 * (2**attempt) + random.uniform(0, 0.25))
-                        continue
-                    raise ProviderError(f"{self.name}: {sc} on GET {url}")
-
-                try:
-                    response.raise_for_status()
-                except httpx.HTTPStatusError as e:
-                    raise ProviderError(f"{self.name}: {e}") from e
-                return response
-
-            except (httpx.ConnectError, httpx.ReadTimeout, httpx.PoolTimeout, RemoteProtocolError) as e:
-                last_exc = e
-                if attempt < max_attempts - 1:
-                    await asyncio.sleep(0.3 + random.uniform(0, 0.2))
-                    continue
-                raise ProviderError(f"{self.name}: transport error on GET {url}") from e
-
-        if last_exc:  # jic
-            raise ProviderError(f"{self.name}: GET {url} failed") from last_exc
-        raise ProviderError(f"{self.name}: GET {url} failed for unknown reasons")
+        """Perform a rate-limited GET with retries and error mapping."""
+        return await self._request(
+            "GET",
+            path_or_url,
+            params=params,
+            headers=headers,
+            timeout=timeout,
+            max_attempts=max_attempts,
+            follow_redirects=follow_redirects,
+            allowed_status_codes=allowed_status_codes,
+        )
 
     async def _get_json(self, path_or_url: str, **kwargs: Any) -> Any:
         """Perform a GET request and parse the response as JSON.
@@ -296,97 +333,18 @@ class ProviderClient(abc.ABC):
         max_attempts: int = 2,
         follow_redirects: bool = False,
     ) -> httpx.Response:
-        """Perform a rate-limited POST with retries and error mapping.
-
-        Args;
-            path_or_url: Relative path or absolute URL to request.
-            params: Optional query parameters.
-            headers: Optional headers to merge with auth headers.
-            data: Optional form-encoded payload.
-            json: Optional JSON payload.
-            timeout: Optional request timeout.
-            max_attempts: Maximum request attempts on retryable failures.
-            follow_redirects: Whether to follow HTTP redirects.
-
-        Returns;
-            The successful HTTP response.
-
-        Raises;
-            AuthError: If authentication fails.
-            NotFound: If the resource is not found.
-            RateLimited: If retries are exhausted after rate limiting.
-            ProviderError: For other provider or transport failures.
-        """
-        url = self._abs_url(path_or_url)
-        req_headers: dict[str, str] = self._auth_headers()
-        if headers:
-            req_headers.update(headers)
-
-        req_params: dict[str, Any] | None = {}
-        auth_params = self._auth_params()
-        if auth_params:
-            req_params.update(auth_params)
-        if params:
-            req_params.update(params)
-        if not req_params:
-            req_params = None
-
-        effective_timeout = timeout
-
-        last_exc: Exception | None = None
-        for attempt in range(max_attempts):
-            try:
-                async with self.limiter:
-                    response = await self.http.post(
-                        url,
-                        params=req_params,
-                        headers=req_headers,
-                        data=data,
-                        json=json,
-                        timeout=effective_timeout,
-                        follow_redirects=follow_redirects,
-                    )
-
-                if 200 <= response.status_code < 300:
-                    return response
-
-                sc = response.status_code
-                if sc in (401, 403):
-                    raise AuthError(f"{self.name}: {sc} on POST {url}")
-                if sc == 404:
-                    raise NotFound(f"{self.name}: 404 on POST {url}")
-                if sc == 429:
-                    if attempt < max_attempts - 1:
-                        retry_after = response.headers.get("Retry-After")
-                        try:
-                            delay = float(retry_after) if retry_after is not None else 1.0
-                        except ValueError:
-                            delay = 1.0
-                        await asyncio.sleep(delay + random.uniform(0, 0.25))
-                        continue
-                    raise RateLimited(f"{self.name}: 429 on POST {url}")
-                if 500 <= sc < 600:
-                    if attempt < max_attempts - 1:
-                        await asyncio.sleep(0.5 * (2**attempt) + random.uniform(0, 0.25))
-                        continue
-                    raise ProviderError(f"{self.name}: {sc} on POST {url}")
-
-                try:
-                    response.raise_for_status()
-                except httpx.HTTPStatusError as e:
-                    raise ProviderError(f"{self.name}: {e}") from e
-                return response
-
-            except (httpx.ConnectError, httpx.ReadTimeout, httpx.PoolTimeout, RemoteProtocolError) as e:
-                last_exc = e
-                if attempt < max_attempts - 1:
-                    await asyncio.sleep(0.3 + random.uniform(0, 0.2))
-                    continue
-                raise ProviderError(f"{self.name}: transport error on POST {url}") from e
-
-        if last_exc:  # jic
-            raise ProviderError(f"{self.name}: POST {url} failed") from last_exc
-        raise ProviderError(f"{self.name}: POST {url} failed for unknown reasons")
+        """Perform a rate-limited POST with retries and error mapping."""
+        return await self._request(
+            "POST",
+            path_or_url,
+            params=params,
+            headers=headers,
+            data=data,
+            json=json,
+            timeout=timeout,
+            max_attempts=max_attempts,
+            follow_redirects=follow_redirects,
+        )
 
     async def _post_json(self, path_or_url: str, **kwargs: Any) -> Any:
         """Perform a POST request and parse the response as JSON.

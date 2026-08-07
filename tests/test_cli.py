@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import os
 import runpy
 import sys
@@ -55,6 +56,39 @@ class _FakeMuxer:
 
 
 class TestCli(unittest.IsolatedAsyncioTestCase):
+    def test_configure_logging_suppresses_http_request_urls(self) -> None:
+        root_logger = logging.getLogger()
+        root_stream = io.StringIO()
+        root_handler = logging.StreamHandler(root_stream)
+        package_logger = logging.getLogger("modmux")
+        httpx_logger = logging.getLogger("httpx")
+        httpcore_logger = logging.getLogger("httpcore")
+
+        original_root_level = root_logger.level
+        original_package_handlers = package_logger.handlers[:]
+        original_package_level = package_logger.level
+        original_package_propagate = package_logger.propagate
+        original_httpx_level = httpx_logger.level
+        original_httpcore_level = httpcore_logger.level
+        root_logger.addHandler(root_handler)
+        root_logger.setLevel(logging.DEBUG)
+        try:
+            cli._configure_logging(debug=True)
+            httpx_logger.info("HTTP Request: GET https://example.com/?api_key=secret")
+
+            self.assertEqual(root_stream.getvalue(), "")
+            self.assertEqual(httpx_logger.level, logging.WARNING)
+            self.assertEqual(httpcore_logger.level, logging.WARNING)
+        finally:
+            root_logger.removeHandler(root_handler)
+            root_logger.setLevel(original_root_level)
+            package_logger.handlers.clear()
+            package_logger.handlers.extend(original_package_handlers)
+            package_logger.setLevel(original_package_level)
+            package_logger.propagate = original_package_propagate
+            httpx_logger.setLevel(original_httpx_level)
+            httpcore_logger.setLevel(original_httpcore_level)
+
     async def test_run_uses_env_creds_and_pretty_output(self) -> None:
         output = io.StringIO()
         with (

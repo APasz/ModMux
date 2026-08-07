@@ -2,7 +2,6 @@
 
 import json
 from collections.abc import Sequence
-from datetime import UTC, datetime
 from typing import cast
 from urllib.parse import urlsplit
 
@@ -14,6 +13,8 @@ from ..models import (
     Author,
     Dependency,
     DependencyRelation,
+    DownloadAccess,
+    DownloadInfo,
     FileAsset,
     LocaleTag,
     LocalisedText,
@@ -27,6 +28,7 @@ from ..modmux_errors import ModMuxError, NotFound, ProviderError
 from ..toggles import ToggleMode, UndefinedType, resolve_toggle
 from ..utils.discovery import register
 from ._base import ProviderClient
+from ._helpers import clean_http_url, coalesce, extract_tags, parse_timestamp
 from .colour import Colour
 
 log = get_logger(__name__)
@@ -42,54 +44,6 @@ class ModrinthCreds(ProviderCreds):
         if not self.api_key:
             return {}
         return {"Authorization": self.api_key.get_secret_value()}
-
-
-def _coalesce(*values: object) -> object | None:
-    for value in values:
-        if value is None:
-            continue
-        if isinstance(value, str) and not value.strip():
-            continue
-        return value
-    return None
-
-
-def _parse_timestamp(value: object | None) -> datetime | None:
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        return datetime.fromtimestamp(value, tz=UTC)
-    if isinstance(value, str):
-        cleaned = value.replace("Z", "+00:00") if value.endswith("Z") else value
-        try:
-            return datetime.fromisoformat(cleaned)
-        except ValueError:
-            return None
-    return None
-
-
-def _extract_tags(raw: object) -> list[str]:
-    tags: list[str] = []
-    if isinstance(raw, list):
-        for entry in raw:
-            if isinstance(entry, str):
-                if entry.strip():
-                    tags.append(entry)
-                continue
-            if isinstance(entry, dict):
-                name = _coalesce(entry.get("name"), entry.get("tag"))
-                if name is not None:
-                    tags.append(str(name))
-    return tags
-
-
-def _clean_url(value: object | None) -> str | None:
-    if value is None:
-        return None
-    url = str(value)
-    if not url.startswith(("http://", "https://")):
-        return None
-    return url
 
 
 def _relation_from_dependency_type(value: object) -> DependencyRelation | None:
@@ -164,8 +118,8 @@ class ModrinthClient(ProviderClient):
                 user = chosen.get("user")
                 if not isinstance(user, dict):
                     user = {}
-                author_id = _coalesce(user.get("id"), user.get("user_id"), chosen.get("user_id"), team_id, "unknown")
-                author_name = _coalesce(user.get("username"), user.get("name"), author_id, "unknown")
+                author_id = coalesce(user.get("id"), user.get("user_id"), chosen.get("user_id"), team_id, "unknown")
+                author_name = coalesce(user.get("username"), user.get("name"), author_id, "unknown")
                 return Author(provider=Provider.MODRINTH, id=str(author_id), name=str(author_name), raw=dict(chosen))
 
         fallback_id = team_id or "unknown"
@@ -174,20 +128,12 @@ class ModrinthClient(ProviderClient):
             fallback_raw = {"team_id": team_id}
         return Author(provider=Provider.MODRINTH, id=str(fallback_id), name=str(fallback_id), raw=fallback_raw)
 
-    async def _fetch_author(self, project_id: str, team_id: str | None) -> Author:
-        try:
-            members = await self._get_json(f"project/{project_id}/members")
-        except ModMuxError as exc:
-            log.debug("Failed to fetch Modrinth members: %s", exc)
-            members = None
-        return self._author_from_members(team_id, members)
-
     def _build_latest_version(self, mod_key: ModID, payload: object) -> ModVersion | None:
         if not isinstance(payload, dict):
             return None
 
         version_id = payload.get("id")
-        version_name = _coalesce(payload.get("name"), payload.get("version_number"), version_id)
+        version_name = coalesce(payload.get("name"), payload.get("version_number"), version_id)
         if version_name is None:
             return None
 
@@ -201,11 +147,18 @@ class ModrinthClient(ProviderClient):
                 if not isinstance(filename, str):
                     continue
                 size = file_payload.get("size")
+                download_url = clean_http_url(file_payload.get("url"))
+                download = (
+                    DownloadInfo.direct(download_url)
+                    if download_url is not None
+                    else DownloadInfo(access=DownloadAccess.UNAVAILABLE)
+                )
                 files.append(
                     FileAsset(
-                        file_id=str(_coalesce(file_payload.get("url"), filename)),
+                        file_id=str(coalesce(file_payload.get("url"), filename)),
                         filename=filename,
                         size_bytes=size if isinstance(size, int) else None,
+                        download=download,
                     )
                 )
 
@@ -236,9 +189,9 @@ class ModrinthClient(ProviderClient):
         return ModVersion(
             id=mod_key,
             name=str(version_name),
-            version=str(_coalesce(payload.get("version_number"), version_id, version_name)),
+            version=str(coalesce(payload.get("version_number"), version_id, version_name)),
             changelog_md=cast(str | None, changelog),
-            published_at=_parse_timestamp(payload.get("date_published")),
+            published_at=parse_timestamp(payload.get("date_published")),
             game_versions=_extract_string_list(payload.get("game_versions")),
             loaders=_extract_string_list(payload.get("loaders")),
             files=files,
@@ -253,24 +206,24 @@ class ModrinthClient(ProviderClient):
         author: Author,
         latest_version: ModVersion | None,
     ) -> Mod:
-        project_id = str(_coalesce(payload.get("id"), requested.id))
-        slug = _coalesce(payload.get("slug"), payload.get("id"))
-        name = _coalesce(payload.get("title"), payload.get("name"), payload.get("slug"), requested.id)
-        description = _coalesce(payload.get("body"), payload.get("description"), payload.get("summary"))
+        project_id = str(coalesce(payload.get("id"), requested.id))
+        slug = coalesce(payload.get("slug"), payload.get("id"))
+        name = coalesce(payload.get("title"), payload.get("name"), payload.get("slug"), requested.id)
+        description = coalesce(payload.get("body"), payload.get("description"), payload.get("summary"))
         if description is not None:
             description = str(description)
 
-        created_at = _parse_timestamp(_coalesce(payload.get("published"), payload.get("date_created")))
-        updated_at = _parse_timestamp(_coalesce(payload.get("updated"), payload.get("date_modified")))
+        created_at = parse_timestamp(coalesce(payload.get("published"), payload.get("date_created")))
+        updated_at = parse_timestamp(coalesce(payload.get("updated"), payload.get("date_modified")))
 
-        tags = _extract_tags(payload.get("categories"))
+        tags = extract_tags(payload.get("categories"))
         versions = payload.get("versions")
         latest_version_id = None
         if isinstance(versions, list) and versions:
             latest_version_id = str(versions[0])
 
-        homepage = _clean_url(
-            _coalesce(
+        homepage = clean_http_url(
+            coalesce(
                 payload.get("project_url"),
                 payload.get("issues_url"),
                 payload.get("source_url"),
@@ -342,8 +295,8 @@ class ModrinthClient(ProviderClient):
         for payload in payloads:
             if not isinstance(payload, dict):
                 continue
-            project_id = _coalesce(payload.get("id"))
-            slug = _coalesce(payload.get("slug"))
+            project_id = coalesce(payload.get("id"))
+            slug = coalesce(payload.get("slug"))
             if project_id is not None and str(project_id) in requested_ids:
                 payload_by_request[str(project_id)] = payload
             if slug is not None and str(slug) in requested_ids:
@@ -357,7 +310,7 @@ class ModrinthClient(ProviderClient):
                 payload = payload_by_request.get(str(requested.id))
                 if not isinstance(payload, dict):
                     continue
-                team_id = _coalesce(payload.get("team"), payload.get("team_id"))
+                team_id = coalesce(payload.get("team"), payload.get("team_id"))
                 if team_id is not None:
                     team_value = str(team_id)
                     if team_value not in team_ids:
@@ -380,7 +333,7 @@ class ModrinthClient(ProviderClient):
                     payload = payload_by_request.get(str(requested.id))
                     if not isinstance(payload, dict):
                         continue
-                    team_id = _coalesce(payload.get("team"), payload.get("team_id"))
+                    team_id = coalesce(payload.get("team"), payload.get("team_id"))
                     if team_id is not None:
                         author = authors_by_team.get(str(team_id))
                         if author is not None:
@@ -428,11 +381,13 @@ class ModrinthClient(ProviderClient):
             payload = payload_by_request.get(str(requested.id))
             if not isinstance(payload, dict):
                 raise NotFound(f"{self.name}: mod {requested.id!r} not found")
-            fallback_team_id = _coalesce(payload.get("team"), payload.get("team_id"))
-            author = authors_by_request.get(
-                str(requested.id),
-                self._author_from_members(str(fallback_team_id) if fallback_team_id is not None else None, None),
-            )
+            fallback_team_id = coalesce(payload.get("team"), payload.get("team_id"))
+            author = authors_by_request.get(str(requested.id))
+            if author is None:
+                author = self._author_from_members(
+                    str(fallback_team_id) if fallback_team_id is not None else None,
+                    None,
+                )
             raw_versions = payload.get("versions")
             latest_version = None
             if isinstance(raw_versions, list) and raw_versions:

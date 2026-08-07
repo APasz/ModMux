@@ -9,7 +9,7 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from modmux.models import DependencyRelation, ModID, Provider
+from modmux.models import DependencyRelation, DownloadAccess, ModID, Provider
 from modmux.modmux_errors import NotFound
 from modmux.providers.modrinth import ModrinthClient
 from modmux.toggles import ToggleMode
@@ -113,6 +113,11 @@ class TestModrinthClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mod.latest_version.game_versions, ["1.20.1"])
         self.assertEqual(len(mod.latest_version.files), 1)
         self.assertEqual(mod.latest_version.files[0].filename, "fabric-api.jar")
+        self.assertEqual(mod.latest_version.files[0].download.access, DownloadAccess.DIRECT)
+        self.assertEqual(
+            str(mod.latest_version.files[0].download.url),
+            "https://cdn.modrinth.com/data/proj-123/versions/ver-123/fabric-api.jar",
+        )
         dependency_summary = [
             (dependency.id.id, dependency.version_req, dependency.relation)
             for dependency in mod.latest_version.dependencies

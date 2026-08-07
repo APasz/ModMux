@@ -1,18 +1,19 @@
 """CurseForge provider integration."""
 
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import cast
 from urllib.parse import urlsplit
 
 from httpx import AsyncClient
 from pydantic import AliasChoices, AnyHttpUrl, Field, SecretStr
 
-from .._log import get_logger
 from ..models import (
     Author,
     Dependency,
     DependencyRelation,
+    DownloadAccess,
+    DownloadInfo,
     FileAsset,
     LocaleTag,
     LocalisedText,
@@ -26,9 +27,8 @@ from ..modmux_errors import NotFound, ProviderError
 from ..toggles import ToggleMode, UndefinedType
 from ..utils.discovery import register
 from ._base import ProviderClient
+from ._helpers import clean_http_url, coalesce, extract_tags, parse_timestamp
 from .colour import Colour
-
-log = get_logger(__name__)
 
 
 class CurseforgeCreds(ProviderCreds):
@@ -41,54 +41,6 @@ class CurseforgeCreds(ProviderCreds):
         if not self.api_key:
             return {}
         return {"x-api-key": self.api_key.get_secret_value()}
-
-
-def _coalesce(*values: object) -> object | None:
-    for value in values:
-        if value is None:
-            continue
-        if isinstance(value, str) and not value.strip():
-            continue
-        return value
-    return None
-
-
-def _parse_timestamp(value: object | None) -> datetime | None:
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        return datetime.fromtimestamp(value, tz=UTC)
-    if isinstance(value, str):
-        cleaned = value.replace("Z", "+00:00") if value.endswith("Z") else value
-        try:
-            return datetime.fromisoformat(cleaned)
-        except ValueError:
-            return None
-    return None
-
-
-def _extract_tags(raw: object) -> list[str]:
-    tags: list[str] = []
-    if isinstance(raw, list):
-        for entry in raw:
-            if isinstance(entry, str):
-                if entry.strip():
-                    tags.append(entry)
-                continue
-            if isinstance(entry, dict):
-                name = _coalesce(entry.get("name"), entry.get("slug"))
-                if name is not None:
-                    tags.append(str(name))
-    return tags
-
-
-def _clean_url(value: object | None) -> str | None:
-    if value is None:
-        return None
-    url = str(value)
-    if not url.startswith(("http://", "https://")):
-        return None
-    return url
 
 
 def _relation_from_file_type(value: object | None) -> DependencyRelation | None:
@@ -120,7 +72,7 @@ def _pick_latest_file(latest_files: object) -> Mapping[str, object] | None:
     for entry in latest_files:
         if not isinstance(entry, dict):
             continue
-        file_timestamp = _parse_timestamp(entry.get("fileDate"))
+        file_timestamp = parse_timestamp(entry.get("fileDate"))
         if best_file is None:
             best_file = entry
             best_timestamp = file_timestamp
@@ -191,7 +143,7 @@ class CurseforgeClient(ProviderClient):
             for payload in payloads:
                 if not isinstance(payload, dict):
                     continue
-                slug = _coalesce(payload.get("slug"))
+                slug = coalesce(payload.get("slug"))
                 if slug is None or str(slug).casefold() != normalised_game:
                     continue
                 game_id = payload.get("id")
@@ -213,7 +165,7 @@ class CurseforgeClient(ProviderClient):
             return None
 
         file_id = latest_file.get("id")
-        file_name = _coalesce(latest_file.get("fileName"), latest_file.get("displayName"))
+        file_name = coalesce(latest_file.get("fileName"), latest_file.get("displayName"))
         if file_id is None and file_name is None:
             return None
 
@@ -221,11 +173,21 @@ class CurseforgeClient(ProviderClient):
         if file_id is not None and file_name is not None:
             file_length = latest_file.get("fileLength")
             size_bytes = file_length if isinstance(file_length, int) else None
+            download_url = clean_http_url(latest_file.get("downloadUrl"))
+            download = (
+                DownloadInfo.direct(
+                    download_url,
+                    requires_authentication=True,
+                )
+                if download_url is not None
+                else DownloadInfo(access=DownloadAccess.RESOLVABLE, requires_authentication=True)
+            )
             files.append(
                 FileAsset(
                     file_id=str(file_id),
                     filename=str(file_name),
                     size_bytes=size_bytes,
+                    download=download,
                 )
             )
 
@@ -253,15 +215,17 @@ class CurseforgeClient(ProviderClient):
                 )
 
         raw_game_versions = latest_file.get("gameVersions")
-        game_versions = [str(version) for version in raw_game_versions if isinstance(version, str)] if isinstance(
-            raw_game_versions, list
-        ) else []
+        game_versions = (
+            [str(version) for version in raw_game_versions if isinstance(version, str)]
+            if isinstance(raw_game_versions, list)
+            else []
+        )
 
         return ModVersion(
             id=mod_key,
-            name=str(_coalesce(latest_file.get("displayName"), file_name, file_id)) if (file_name or file_id) else None,
+            name=str(coalesce(latest_file.get("displayName"), file_name, file_id)) if (file_name or file_id) else None,
             version=str(file_id) if file_id is not None else None,
-            published_at=_parse_timestamp(latest_file.get("fileDate")),
+            published_at=parse_timestamp(latest_file.get("fileDate")),
             game_versions=game_versions,
             files=files,
             dependencies=dependencies,
@@ -290,23 +254,37 @@ class CurseforgeClient(ProviderClient):
             raise ProviderError(f"{self.name}: unexpected search response")
         return str(first["id"]), game_id
 
+    async def resolve_download(self, mod_id: ModID, file_id: str) -> DownloadInfo:
+        """Mint a direct CurseForge CDN URL for a release file."""
+        file_value = str(file_id).strip()
+        if not file_value.isdigit():
+            raise ValueError("CurseForge file ids must be numeric.")
+
+        mod_value, _ = await self._resolve_mod_id(mod_id)
+        payload = await self._get_json(f"mods/{mod_value}/files/{file_value}/download-url")
+        raw_url = payload.get("data") if isinstance(payload, dict) else None
+        download_url = clean_http_url(raw_url)
+        if download_url is None:
+            raise ProviderError(f"{self.name}: download URL response did not include a valid URL")
+        return DownloadInfo.direct(download_url, requires_authentication=True)
+
     def _build_mod(self, requested: ModID, payload: dict[str, object], mod_value: str) -> Mod:
-        name = _coalesce(payload.get("name"), payload.get("slug"), requested.id)
-        slug = _coalesce(payload.get("slug"))
-        description = _coalesce(payload.get("summary"))
+        name = coalesce(payload.get("name"), payload.get("slug"), requested.id)
+        slug = coalesce(payload.get("slug"))
+        description = coalesce(payload.get("summary"))
         if description is not None:
             description = str(description)
 
         raw_links = payload.get("links")
         links = cast(dict[str, object], raw_links) if isinstance(raw_links, dict) else {}
-        homepage = _clean_url(_coalesce(links.get("websiteUrl"), links.get("sourceUrl"), links.get("wikiUrl")))
+        homepage = clean_http_url(coalesce(links.get("websiteUrl"), links.get("sourceUrl"), links.get("wikiUrl")))
         if homepage is None:
-            homepage = _clean_url(payload.get("url"))
+            homepage = clean_http_url(payload.get("url"))
 
-        created_at = _parse_timestamp(payload.get("dateCreated"))
-        updated_at = _parse_timestamp(payload.get("dateModified"))
+        created_at = parse_timestamp(payload.get("dateCreated"))
+        updated_at = parse_timestamp(payload.get("dateModified"))
 
-        tags = _extract_tags(payload.get("categories"))
+        tags = extract_tags(payload.get("categories"), keys=("name", "slug"))
 
         authors = payload.get("authors")
         author_id = "unknown"
@@ -315,11 +293,11 @@ class CurseforgeClient(ProviderClient):
         if isinstance(authors, list) and authors:
             first = authors[0]
             if isinstance(first, dict):
-                author_id = str(_coalesce(first.get("id"), first.get("userId"), author_id))
-                author_name = str(_coalesce(first.get("name"), first.get("username"), author_id))
+                author_id = str(coalesce(first.get("id"), first.get("userId"), author_id))
+                author_name = str(coalesce(first.get("name"), first.get("username"), author_id))
                 author_raw = dict(first)
 
-        game_id = _coalesce(payload.get("gameId"), requested.game)
+        game_id = coalesce(payload.get("gameId"), requested.game)
         mod_key = ModID(
             provider=Provider.CURSEFORGE,
             id=str(payload.get("id", mod_value)),

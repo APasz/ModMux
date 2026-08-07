@@ -10,11 +10,36 @@ import httpx
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from modmux.cache import ModioLookupCache
-from modmux.models import DependencyRelation, ModID, Provider
+from modmux.models import DependencyRelation, DownloadAccess, ModID, Provider
 from modmux.providers.modio import ModioClient, ModioCreds
 
 
 class TestModioClient(unittest.IsolatedAsyncioTestCase):
+    async def test_resolve_download_mints_direct_url(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            path = urlsplit(str(request.url)).path
+            self.assertEqual(path, "/v1/games/456/mods/123/files/999")
+            return httpx.Response(
+                200,
+                json={
+                    "id": 999,
+                    "download": {
+                        "binary_url": "https://api.mod.io/download/999?signature=token",
+                        "date_expires": 1700003600,
+                    },
+                },
+                request=request,
+            )
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            creds = ModioCreds.model_validate({"token": "key", "user": "user123"})
+            client = ModioClient(creds, http=http)
+            download = await client.resolve_download(ModID(provider=Provider.MODIO, id="123", game="456"), "999")
+
+        self.assertEqual(download.access, DownloadAccess.DIRECT)
+        self.assertEqual(str(download.url), "https://api.mod.io/download/999?signature=token")
+        self.assertIsNotNone(download.expires_at)
+
     async def test_get_mod_populates_latest_version_and_dependencies(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
             path = urlsplit(str(request.url)).path
@@ -38,6 +63,10 @@ class TestModioClient(unittest.IsolatedAsyncioTestCase):
                                     "version": "1.2.3",
                                     "changelog": "Fixed things",
                                     "date_added": 1700000000,
+                                    "download": {
+                                        "binary_url": "https://api.mod.io/v1/games/456/mods/123/files/999/download/token",
+                                        "date_expires": 1700003600,
+                                    },
                                 },
                                 "submitted_by": {"id": 123, "username": "user-123"},
                             }
@@ -70,6 +99,10 @@ class TestModioClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mod.latest_version.version, "1.2.3")
         self.assertEqual(mod.latest_version.files[0].filename, "base-name.zip")
         self.assertEqual(mod.latest_version.files[0].size_bytes, 2048)
+        self.assertEqual(mod.latest_version.files[0].download.access, DownloadAccess.DIRECT)
+        expires_at = mod.latest_version.files[0].download.expires_at
+        assert expires_at is not None
+        self.assertEqual(expires_at.year, 2023)
         self.assertEqual([dependency.id.id for dependency in mod.latest_version.dependencies], ["77", "88"])
         self.assertEqual(
             [dependency.relation for dependency in mod.latest_version.dependencies],

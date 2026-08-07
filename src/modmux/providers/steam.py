@@ -1,7 +1,7 @@
 """Steam Workshop provider integration."""
 
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import datetime
 from os.path import basename
 from typing import cast
 from urllib.parse import parse_qs, urlsplit
@@ -10,11 +10,24 @@ from httpx import AsyncClient
 from pydantic import AliasChoices, AnyHttpUrl, Field, SecretStr
 
 from .._log import get_logger
-from ..models import Author, FileAsset, LocaleTag, LocalisedText, Mod, ModID, ModVersion, Provider, ProviderCreds
+from ..models import (
+    Author,
+    DownloadAccess,
+    DownloadInfo,
+    FileAsset,
+    LocaleTag,
+    LocalisedText,
+    Mod,
+    ModID,
+    ModVersion,
+    Provider,
+    ProviderCreds,
+)
 from ..modmux_errors import ModMuxError, NotFound, ProviderError
 from ..toggles import ToggleMode, UndefinedType, resolve_toggle
 from ..utils.discovery import register
 from ._base import ProviderClient
+from ._helpers import coalesce, extract_tags, parse_timestamp
 from .colour import Colour
 
 log = get_logger(__name__)
@@ -32,45 +45,6 @@ class SteamCreds(ProviderCreds):
         return {"key": self.api_key.get_secret_value()}
 
 
-def _coalesce(*values: object) -> object | None:
-    for value in values:
-        if value is None:
-            continue
-        if isinstance(value, str) and not value.strip():
-            continue
-        return value
-    return None
-
-
-def _parse_timestamp(value: object | None) -> datetime | None:
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        return datetime.fromtimestamp(value, tz=UTC)
-    if isinstance(value, str):
-        cleaned = value.replace("Z", "+00:00") if value.endswith("Z") else value
-        try:
-            return datetime.fromisoformat(cleaned)
-        except ValueError:
-            return None
-    return None
-
-
-def _extract_tags(raw: object) -> list[str]:
-    tags: list[str] = []
-    if isinstance(raw, list):
-        for entry in raw:
-            if isinstance(entry, str):
-                if entry.strip():
-                    tags.append(entry)
-                continue
-            if isinstance(entry, dict):
-                name = _coalesce(entry.get("tag"), entry.get("name"))
-                if name is not None:
-                    tags.append(str(name))
-    return tags
-
-
 def _extract_filename(details: dict[str, object]) -> str | None:
     filename = details.get("filename")
     if isinstance(filename, str) and filename.strip():
@@ -82,6 +56,13 @@ def _extract_filename(details: dict[str, object]) -> str | None:
         if candidate:
             return candidate
     return None
+
+
+def _download_info(details: dict[str, object]) -> DownloadInfo:
+    file_url = details.get("file_url")
+    if not isinstance(file_url, str) or not file_url.startswith(("http://", "https://")):
+        return DownloadInfo(access=DownloadAccess.UNAVAILABLE)
+    return DownloadInfo.direct(file_url)
 
 
 _STEAM_LANGUAGE_MAP: dict[str, str] = {
@@ -214,22 +195,16 @@ class SteamClient(ProviderClient):
         for entry in players:
             if not isinstance(entry, dict):
                 continue
-            entry_id = _coalesce(entry.get("steamid"), entry.get("id"))
+            entry_id = coalesce(entry.get("steamid"), entry.get("id"))
             if entry_id is not None and str(entry_id) == steam_id:
                 player = entry
                 break
 
         if player is None:
-            for entry in players:
-                if isinstance(entry, dict):
-                    player = entry
-                    break
-
-        if player is None:
             raise NotFound(f"{self.name}: user {steam_id!r} not found")
 
-        resolved_id = _coalesce(player.get("steamid"), player.get("id"), steam_id)
-        display_name = _coalesce(player.get("personaname"), player.get("realname"), resolved_id, steam_id)
+        resolved_id = coalesce(player.get("steamid"), player.get("id"), steam_id)
+        display_name = coalesce(player.get("personaname"), player.get("realname"), resolved_id, steam_id)
         return Author(provider=Provider.STEAM, id=str(resolved_id), name=str(display_name), raw=player)
 
     def _build_details_payload(self, mod_ids: Sequence[str], *, language: str | None = None) -> dict[str, str]:
@@ -268,7 +243,7 @@ class SteamClient(ProviderClient):
                 if not isinstance(details, dict):
                     raise ProviderError(f"{self.name}: unexpected workshop payload")
                 requested_id = batch[index] if index < len(batch) else ""
-                resolved_id = str(_coalesce(details.get("publishedfileid"), requested_id))
+                resolved_id = str(coalesce(details.get("publishedfileid"), requested_id))
                 if not resolved_id:
                     raise ProviderError(f"{self.name}: workshop response missing published file id")
                 details_by_id[resolved_id] = details
@@ -294,11 +269,11 @@ class SteamClient(ProviderClient):
             for player in players:
                 if not isinstance(player, dict):
                     continue
-                resolved_id = _coalesce(player.get("steamid"), player.get("id"))
+                resolved_id = coalesce(player.get("steamid"), player.get("id"))
                 if resolved_id is None:
                     continue
                 author_id = str(resolved_id)
-                display_name = _coalesce(player.get("personaname"), player.get("realname"), author_id)
+                display_name = coalesce(player.get("personaname"), player.get("realname"), author_id)
                 authors[author_id] = Author(
                     provider=Provider.STEAM,
                     id=author_id,
@@ -319,10 +294,11 @@ class SteamClient(ProviderClient):
         if filename is None:
             return None
 
-        file_id = _coalesce(details.get("hcontent_file"), details.get("publishedfileid"), filename)
+        file_id = coalesce(details.get("hcontent_file"), details.get("publishedfileid"), filename)
         file_size = details.get("file_size")
-        raw_revision = _coalesce(details.get("revision_change_number"), details.get("revision"))
+        raw_revision = coalesce(details.get("revision_change_number"), details.get("revision"))
         version = str(raw_revision) if raw_revision is not None else None
+        download = _download_info(details)
 
         return ModVersion(
             id=mod_key,
@@ -334,6 +310,7 @@ class SteamClient(ProviderClient):
                     file_id=str(file_id),
                     filename=filename,
                     size_bytes=file_size if isinstance(file_size, int) else None,
+                    download=download,
                 )
             ],
             raw=dict(details),
@@ -368,31 +345,30 @@ class SteamClient(ProviderClient):
                     raise NotFound(f"{self.name}: workshop item {requested.id!r} not found")
                 raise ProviderError(f"{self.name}: workshop result={result_code}")
 
-        title = _coalesce(details.get("title"), requested.id)
+        title = coalesce(details.get("title"), requested.id)
         description = details.get("description")
         if description is not None:
             description = str(description)
 
-        homepage = _coalesce(details.get("url"), details.get("file_url"), details.get("preview_url"))
+        homepage = coalesce(details.get("url"), details.get("file_url"), details.get("preview_url"))
         if homepage and not str(homepage).startswith(("http://", "https://")):
             homepage = None
 
-        created_at = _parse_timestamp(details.get("time_created"))
-        updated_at = _parse_timestamp(details.get("time_updated"))
+        created_at = parse_timestamp(details.get("time_created"))
+        updated_at = parse_timestamp(details.get("time_updated"))
 
-        author_id = str(_coalesce(details.get("creator"), "unknown"))
+        author_id = str(coalesce(details.get("creator"), "unknown"))
         author_raw: dict[str, object] = {}
         creator = details.get("creator")
         if creator is not None:
             author_raw = {"creator": creator}
-        author = authors.get(
-            author_id,
-            Author(provider=Provider.STEAM, id=author_id, name=author_id, raw=author_raw),
-        )
+        author = authors.get(author_id)
+        if author is None:
+            author = Author(provider=Provider.STEAM, id=author_id, name=author_id, raw=author_raw)
 
-        tags = _extract_tags(details.get("tags"))
+        tags = extract_tags(details.get("tags"), keys=("tag", "name"))
 
-        game_id = _coalesce(requested.game, details.get("consumer_app_id"), details.get("creator_app_id"))
+        game_id = coalesce(requested.game, details.get("consumer_app_id"), details.get("creator_app_id"))
         mod_key = ModID(
             provider=Provider.STEAM,
             id=str(requested.id),
@@ -474,7 +450,7 @@ class SteamClient(ProviderClient):
                     log.debug("Steam localization fetch failed for %s: %s", language, exc)
                     continue
                 for mod_id, translated in translated_by_id.items():
-                    translated_title = _coalesce(translated.get("title"))
+                    translated_title = coalesce(translated.get("title"))
                     translated_description = translated.get("description")
                     for tag in tags:
                         if translated_title is not None:
@@ -487,9 +463,9 @@ class SteamClient(ProviderClient):
         if should_enrich_author:
             author_ids = sorted(
                 {
-                    str(_coalesce(details.get("creator"), "unknown"))
+                    str(coalesce(details.get("creator"), "unknown"))
                     for details in details_by_id.values()
-                    if str(_coalesce(details.get("creator"), "unknown")) != "unknown"
+                    if str(coalesce(details.get("creator"), "unknown")) != "unknown"
                 }
             )
             if author_ids:

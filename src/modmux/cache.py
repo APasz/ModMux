@@ -11,6 +11,8 @@ class AsyncTTLCache:
     """Simple async-aware TTL cache with per-key locks."""
 
     def __init__(self, ttl: float | None = 60, maxsize: int = 512) -> None:
+        if maxsize < 1:
+            raise ValueError("maxsize must be at least 1")
         self.ttl = ttl
         self.maxsize = maxsize
         self._data: dict[Any, tuple[float | None, Any]] = {}
@@ -61,7 +63,7 @@ class AsyncTTLCache:
         """
         effective_ttl = self.ttl if ttl is None else ttl
         expires_at = None if effective_ttl is None else time.monotonic() + effective_ttl
-        if len(self._data) >= self.maxsize:
+        if key not in self._data and len(self._data) >= self.maxsize:
             self._data.pop(next(iter(self._data)))
         self._data[key] = (expires_at, value)
 

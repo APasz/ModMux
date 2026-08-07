@@ -9,7 +9,7 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from modmux.models import ModID, Provider
+from modmux.models import DownloadAccess, ModID, Provider
 from modmux.modmux_errors import NotFound, ProviderError
 from modmux.providers.transportfevernet import TransportfevernetClient
 
@@ -274,6 +274,11 @@ class TestTransportfevernetClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([file.file_id for file in mod.latest_version.files], ["101", "102"])
         self.assertEqual(mod.latest_version.files[0].filename, "marc345_seilbahn_1_1.1_101")
         self.assertEqual(mod.latest_version.files[0].size_bytes, 20)
+        self.assertEqual(mod.latest_version.files[0].download.access, DownloadAccess.WEB)
+        self.assertEqual(
+            str(mod.latest_version.files[0].download.url),
+            "https://www.transportfever.net/filebase/entry-download/7867/?fileID=101",
+        )
         self.assertEqual(
             mod.latest_version.raw["selected"]["download_url"],
             "https://www.transportfever.net/filebase/entry-download/7867/?fileID=101",
@@ -360,9 +365,7 @@ class TestTransportfevernetClient(unittest.IsolatedAsyncioTestCase):
 
     async def test_get_mod_rejects_incomplete_repository(self) -> None:
         async with httpx.AsyncClient(
-            transport=httpx.MockTransport(
-                _json_handler({"/filebase/repos/tpf2.json": _repo_payload(complete=False)})
-            )
+            transport=httpx.MockTransport(_json_handler({"/filebase/repos/tpf2.json": _repo_payload(complete=False)}))
         ) as http:
             client = TransportfevernetClient(None, http=http)
             with self.assertRaises(ProviderError):
@@ -444,7 +447,9 @@ class TestTransportfevernetClient(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(mod.author.id, "99")
         self.assertEqual(mod.author.name, "ExampleAuthor")
-        self.assertEqual(str(mod.homepage), "https://www.transportfever.net/filebase/entry/8010-smart-town-development/")
+        self.assertEqual(
+            str(mod.homepage), "https://www.transportfever.net/filebase/entry/8010-smart-town-development/"
+        )
         self.assertEqual(mod.latest_version_id, "1.0")
         self.assertEqual(mod.raw["source"], "html_fallback")
         self.assertIsNotNone(mod.latest_version)

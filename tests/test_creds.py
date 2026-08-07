@@ -11,6 +11,7 @@ from modmux.providers.modio import ModioCreds
 from modmux.providers.modrinth import ModrinthCreds
 from modmux.providers.nexusmods import NexusCreds
 from modmux.providers.steam import SteamCreds
+from modmux.providers.wube import WubeCreds
 
 
 class TestCreds(unittest.TestCase):
@@ -31,3 +32,9 @@ class TestCreds(unittest.TestCase):
     def test_steam_optional(self) -> None:
         creds = SteamCreds.model_validate({})
         self.assertEqual(creds.params(), {})
+
+    def test_wube_download_params(self) -> None:
+        creds = WubeCreds.model_validate({"token": "token", "user": "alice"})
+        self.assertEqual(creds.params(), {})
+        self.assertEqual(creds.download_params(), {"username": "alice", "token": "token"})
+        self.assertTrue(creds.has_download_credentials())

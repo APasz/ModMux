@@ -17,6 +17,22 @@ from .utils.urls import parse_url
 
 log = get_logger("cli")
 _REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[2]
+_CLI_HANDLER_NAME: Final[str] = "modmux-cli"
+
+
+def _configure_logging(*, debug: bool) -> None:
+    """Configure CLI logging without enabling third-party request logs."""
+    package_logger = get_logger()
+    package_logger.setLevel(logging.DEBUG if debug else logging.WARNING)
+    package_logger.propagate = False
+    if not any(handler.get_name() == _CLI_HANDLER_NAME for handler in package_logger.handlers):
+        handler = logging.StreamHandler()
+        handler.set_name(_CLI_HANDLER_NAME)
+        handler.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
+        package_logger.addHandler(handler)
+
+    for logger_name in ("httpx", "httpcore"):
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
 
 
 def _parse_provider(value: str) -> Provider:
@@ -140,9 +156,7 @@ async def _get_mods_from_urls(
         entries = grouped[provider]
         mods = await cli.get_mods(provider, [mod_id for _, mod_id in entries])
         if len(mods) != len(entries):
-            raise BatchResponseError(
-                f"{provider}: expected {len(entries)} mods from bulk lookup, received {len(mods)}"
-            )
+            raise BatchResponseError(f"{provider}: expected {len(entries)} mods from bulk lookup, received {len(mods)}")
         for (index, _), mod in zip(entries, mods, strict=False):
             results[index] = mod
 
@@ -175,7 +189,7 @@ async def _run(argv: list[str] | None = None) -> int:
     elif args.provider is None or not args.mod_ids:
         parser.error("provider and at least one mod_id are required unless --from-urls is used.")
 
-    logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO)
+    _configure_logging(debug=args.debug)
     log.info("main")
     dotenv_anchors: list[str | os.PathLike[str]] = []
     if args.from_urls:

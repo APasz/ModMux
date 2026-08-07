@@ -2,18 +2,19 @@
 
 import re
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import cast
 from urllib.parse import urlsplit
 
 from httpx import AsyncClient
 from pydantic import AliasChoices, AnyHttpUrl, Field, SecretStr
 
-from .._log import get_logger
 from ..models import (
     Author,
     Dependency,
     DependencyRelation,
+    DownloadAccess,
+    DownloadInfo,
     FileAsset,
     LocaleTag,
     LocalisedText,
@@ -23,13 +24,12 @@ from ..models import (
     Provider,
     ProviderCreds,
 )
-from ..modmux_errors import ProviderError
+from ..modmux_errors import AuthError, ProviderError
 from ..toggles import ToggleMode, UndefinedType
 from ..utils.discovery import register
 from ._base import ProviderClient
+from ._helpers import clean_http_url, coalesce, extract_tags, parse_timestamp
 from .colour import Colour
-
-log = get_logger(__name__)
 
 
 class WubeCreds(ProviderCreds):
@@ -37,59 +37,33 @@ class WubeCreds(ProviderCreds):
 
     provider: Provider = Provider.WUBE
     api_key: SecretStr | None = Field(default=None, validation_alias=AliasChoices("token", "key", "api_key"))
+    user_id: SecretStr | None = Field(default=None, validation_alias=AliasChoices("user", "user_id", "username"))
 
-    def headers(self) -> dict[str, str]:
-        if not self.api_key:
+    def download_params(self) -> dict[str, str]:
+        """Return the username/token pair required by Factorio downloads.
+
+        These credentials are deliberately separate from ``params()`` because
+        public mod-metadata requests do not require them.
+        """
+        if not self.api_key or not self.user_id:
             return {}
-        return {"Authorization": self.api_key.get_secret_value()}
+        return {
+            "username": self.user_id.get_secret_value(),
+            "token": self.api_key.get_secret_value(),
+        }
+
+    def has_download_credentials(self) -> bool:
+        """Whether both credentials required by the download endpoint are configured."""
+        return self.api_key is not None and self.user_id is not None
 
 
-def _coalesce(*values: object) -> object | None:
-    for value in values:
-        if value is None:
-            continue
-        if isinstance(value, str) and not value.strip():
-            continue
-        return value
-    return None
-
-
-def _parse_timestamp(value: object | None) -> datetime | None:
-    if value is None:
+def _download_url(value: object | None) -> str | None:
+    if not isinstance(value, str):
         return None
-    if isinstance(value, (int, float)):
-        return datetime.fromtimestamp(value, tz=UTC)
-    if isinstance(value, str):
-        cleaned = value.replace("Z", "+00:00") if value.endswith("Z") else value
-        try:
-            return datetime.fromisoformat(cleaned)
-        except ValueError:
-            return None
-    return None
-
-
-def _extract_tags(raw: object) -> list[str]:
-    tags: list[str] = []
-    if isinstance(raw, list):
-        for entry in raw:
-            if isinstance(entry, str):
-                if entry.strip():
-                    tags.append(entry)
-                continue
-            if isinstance(entry, dict):
-                name = _coalesce(entry.get("name"), entry.get("tag"))
-                if name is not None:
-                    tags.append(str(name))
-    return tags
-
-
-def _clean_url(value: object | None) -> str | None:
-    if value is None:
+    cleaned = value.strip()
+    if not cleaned.startswith("/download/"):
         return None
-    url = str(value)
-    if not url.startswith(("http://", "https://")):
-        return None
-    return url
+    return f"https://mods.factorio.com{cleaned}"
 
 
 _DEPENDENCY_PATTERN = re.compile(
@@ -117,7 +91,7 @@ def _pick_latest_release(
     best_release: Mapping[str, object] | None = None
     best_timestamp: datetime | None = None
     for entry in release_entries:
-        released_at = _parse_timestamp(entry.get("released_at"))
+        released_at = parse_timestamp(entry.get("released_at"))
         if best_release is None:
             best_release = entry
             best_timestamp = released_at
@@ -180,6 +154,7 @@ class WubeClient(ProviderClient):
 
     def __init__(self, creds: WubeCreds | None, *, http: AsyncClient, cache: object | None = None) -> None:
         super().__init__(creds, http=http, cache=cache)
+        self.creds: WubeCreds | None = creds
 
     @classmethod
     def parse_url(cls, url: str) -> ModID | None:
@@ -190,6 +165,19 @@ class WubeClient(ProviderClient):
         if len(segments) >= 2 and segments[0] in {"mod", "mods"}:
             return ModID(provider=Provider.WUBE, id=segments[1])
         return None
+
+    async def resolve_download(self, mod_id: ModID, file_id: str) -> DownloadInfo:
+        """Check Factorio download credentials and return the safe web URL.
+
+        The Factorio download endpoint authenticates with query parameters. The
+        returned descriptor deliberately omits them so callers do not leak
+        credentials when logging or serialising download metadata.
+        """
+        download = await super().resolve_download(mod_id, file_id)
+        if download.access is DownloadAccess.WEB:
+            if not self.creds or not self.creds.has_download_credentials():
+                raise AuthError(f"{self.name}: download resolution requires both username and token credentials")
+        return download
 
     async def get_mod(
         self,
@@ -212,21 +200,21 @@ class WubeClient(ProviderClient):
         if not isinstance(payload, dict):
             raise ProviderError(f"{self.name}: unexpected response shape")
 
-        slug = _coalesce(payload.get("name"), mod_id.id)
-        name = _coalesce(payload.get("title"), payload.get("name"), mod_id.id)
-        description = _coalesce(payload.get("description"), payload.get("summary"))
+        slug = coalesce(payload.get("name"), mod_id.id)
+        name = coalesce(payload.get("title"), payload.get("name"), mod_id.id)
+        description = coalesce(payload.get("description"), payload.get("summary"))
         if description is not None:
             description = str(description)
 
-        owner = _coalesce(payload.get("owner"), payload.get("author"), "unknown")
+        owner = coalesce(payload.get("owner"), payload.get("author"), "unknown")
         author = Author(provider=Provider.WUBE, id=str(owner), name=str(owner), raw={"owner": owner})
 
-        tags = _extract_tags(payload.get("tags"))
-        category = _coalesce(payload.get("category"))
+        tags = extract_tags(payload.get("tags"))
+        category = coalesce(payload.get("category"))
         if category is not None:
             tags.append(str(category))
 
-        homepage = _clean_url(_coalesce(payload.get("homepage"), payload.get("homepage_url"), payload.get("url")))
+        homepage = clean_http_url(coalesce(payload.get("homepage"), payload.get("homepage_url"), payload.get("url")))
         if homepage is None and slug is not None:
             homepage = f"https://mods.factorio.com/mod/{slug}"
 
@@ -238,7 +226,7 @@ class WubeClient(ProviderClient):
             for entry in releases:
                 if not isinstance(entry, dict):
                     continue
-                released_at = _parse_timestamp(entry.get("released_at"))
+                released_at = parse_timestamp(entry.get("released_at"))
                 if released_at is not None:
                     release_dates.append(released_at)
             if release_dates:
@@ -247,7 +235,7 @@ class WubeClient(ProviderClient):
 
         latest_release = payload.get("latest_release")
         if isinstance(latest_release, dict):
-            released_at = _parse_timestamp(latest_release.get("released_at"))
+            released_at = parse_timestamp(latest_release.get("released_at"))
             if released_at is not None:
                 updated_at = released_at if updated_at is None or released_at > updated_at else updated_at
                 if created_at is None:
@@ -265,10 +253,20 @@ class WubeClient(ProviderClient):
             latest_files: list[FileAsset] = []
             file_name = latest_release_payload.get("file_name")
             if isinstance(file_name, str) and latest_version_id is not None:
+                download_url = _download_url(latest_release_payload.get("download_url"))
+                download = (
+                    DownloadInfo.web(
+                        download_url,
+                        requires_authentication=True,
+                    )
+                    if download_url is not None
+                    else DownloadInfo(access=DownloadAccess.RESOLVABLE, requires_authentication=True)
+                )
                 latest_files.append(
                     FileAsset(
                         file_id=latest_version_id,
                         filename=file_name,
+                        download=download,
                     )
                 )
 
@@ -277,7 +275,7 @@ class WubeClient(ProviderClient):
                 id=mod_key,
                 name=latest_version_id,
                 version=latest_version_id,
-                published_at=_parse_timestamp(latest_release_payload.get("released_at")),
+                published_at=parse_timestamp(latest_release_payload.get("released_at")),
                 files=latest_files,
                 dependencies=_parse_dependencies(
                     info_json.get("dependencies") if isinstance(info_json, dict) else None

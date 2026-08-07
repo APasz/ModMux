@@ -1,21 +1,31 @@
 """Nexus Mods provider integration."""
 
 from collections.abc import Mapping
-from datetime import UTC, datetime
 from typing import cast
 from urllib.parse import urlsplit
 
 from httpx import AsyncClient
 from pydantic import AnyHttpUrl, Field, SecretStr
 
-from .._log import get_logger
-from ..models import Author, FileAsset, LocaleTag, LocalisedText, Mod, ModID, ModVersion, Provider, ProviderCreds
+from ..models import (
+    Author,
+    DownloadAccess,
+    DownloadInfo,
+    FileAsset,
+    LocaleTag,
+    LocalisedText,
+    Mod,
+    ModID,
+    ModVersion,
+    Provider,
+    ProviderCreds,
+)
+from ..modmux_errors import ProviderError
 from ..toggles import ToggleMode, UndefinedType
 from ..utils.discovery import register
 from ._base import ProviderClient
+from ._helpers import coalesce, parse_timestamp
 from .colour import Colour
-
-log = get_logger(__name__)
 
 
 class NexusCreds(ProviderCreds):
@@ -26,30 +36,6 @@ class NexusCreds(ProviderCreds):
 
     def headers(self) -> dict[str, str]:
         return {"apikey": self.api_key.get_secret_value()}
-
-
-def _coalesce(*values: object) -> object | None:
-    for value in values:
-        if value is None:
-            continue
-        if isinstance(value, str) and not value.strip():
-            continue
-        return value
-    return None
-
-
-def _parse_timestamp(value: object | None) -> datetime | None:
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        return datetime.fromtimestamp(value, tz=UTC)
-    if isinstance(value, str):
-        cleaned = value.replace("Z", "+00:00") if value.endswith("Z") else value
-        try:
-            return datetime.fromisoformat(cleaned)
-        except ValueError:
-            return None
-    return None
 
 
 def _extract_file_payloads(payload: object) -> list[dict[str, object]]:
@@ -84,7 +70,7 @@ def _select_latest_file_payloads(mod_payload: Mapping[str, object], files_payloa
     if not visible_files:
         return []
 
-    raw_version = _coalesce(mod_payload.get("version"))
+    raw_version = coalesce(mod_payload.get("version"))
     if raw_version is None:
         return visible_files
 
@@ -100,12 +86,17 @@ def _select_latest_file_payloads(mod_payload: Mapping[str, object], files_payloa
 
 def _build_file_asset(entry: Mapping[str, object]) -> FileAsset | None:
     file_id = entry.get("file_id")
-    filename = _coalesce(entry.get("file_name"), entry.get("name"))
+    filename = coalesce(entry.get("file_name"), entry.get("name"))
     if file_id is None or filename is None:
         return None
     size = entry.get("size")
     size_bytes = size if isinstance(size, int) else None
-    return FileAsset(file_id=str(file_id), filename=str(filename), size_bytes=size_bytes)
+    return FileAsset(
+        file_id=str(file_id),
+        filename=str(filename),
+        size_bytes=size_bytes,
+        download=DownloadInfo(access=DownloadAccess.RESOLVABLE, requires_authentication=True),
+    )
 
 
 @register
@@ -131,7 +122,7 @@ class NexusmodsClient(ProviderClient):
         selected_files = _select_latest_file_payloads(mod_payload, files_payload)
         latest_files = [asset for entry in selected_files if (asset := _build_file_asset(entry)) is not None]
 
-        raw_version = _coalesce(mod_payload.get("version"))
+        raw_version = coalesce(mod_payload.get("version"))
         version = str(raw_version).strip() if raw_version is not None else None
         if version == "":
             version = None
@@ -142,7 +133,7 @@ class NexusmodsClient(ProviderClient):
         published_candidates = [
             timestamp
             for entry in selected_files
-            if (timestamp := _parse_timestamp(entry.get("uploaded_time"))) is not None
+            if (timestamp := parse_timestamp(entry.get("uploaded_time"))) is not None
         ]
         published_at = max(published_candidates) if published_candidates else None
 
@@ -157,6 +148,28 @@ class NexusmodsClient(ProviderClient):
                 "files": [dict(entry) for entry in selected_files],
             },
         )
+
+    async def resolve_download(self, mod_id: ModID, file_id: str) -> DownloadInfo:
+        """Mint a direct Nexus Mods CDN URL for a release file."""
+        if not mod_id.game:
+            raise ValueError("Nexus Mods requires ModID.game (game domain name).")
+
+        file_value = str(file_id).strip()
+        if not file_value.isdigit():
+            raise ValueError("Nexus Mods file ids must be numeric.")
+
+        payload = await self._get_json(f"games/{mod_id.game}/mods/{mod_id.id}/files/{file_value}/download_link.json")
+        if not isinstance(payload, list):
+            raise ProviderError(f"{self.name}: unexpected download URL response shape")
+
+        for mirror in payload:
+            if not isinstance(mirror, Mapping):
+                continue
+            url = coalesce(mirror.get("URI"), mirror.get("uri"))
+            if isinstance(url, str) and url.startswith(("http://", "https://")):
+                return DownloadInfo.direct(url)
+
+        raise ProviderError(f"{self.name}: download URL response did not include a valid URL")
 
     @classmethod
     def parse_url(cls, url: str) -> ModID | None:
@@ -206,37 +219,37 @@ class NexusmodsClient(ProviderClient):
         if not isinstance(user, dict):
             user = {}
 
-        author_name = _coalesce(
+        author_name = coalesce(
             data.get("author"),
             data.get("uploaded_by"),
             user.get("name"),
             user.get("username"),
             "unknown",
         )
-        author_id = _coalesce(
+        author_id = coalesce(
             data.get("user_id"),
             user.get("member_id"),
             user.get("user_id"),
             author_name,
         )
 
-        created_at = _parse_timestamp(
-            _coalesce(data.get("created_timestamp"), data.get("created_time"), data.get("created_at"))
+        created_at = parse_timestamp(
+            coalesce(data.get("created_timestamp"), data.get("created_time"), data.get("created_at"))
         )
-        updated_at = _parse_timestamp(
-            _coalesce(data.get("updated_timestamp"), data.get("updated_time"), data.get("updated_at"))
+        updated_at = parse_timestamp(
+            coalesce(data.get("updated_timestamp"), data.get("updated_time"), data.get("updated_at"))
         )
 
         tags: list[str] = []
-        category_name = _coalesce(data.get("category_name"), data.get("category"))
+        category_name = coalesce(data.get("category_name"), data.get("category"))
         if category_name:
             tags.append(str(category_name))
         raw_tags = data.get("tags")
         if isinstance(raw_tags, list):
             tags.extend(str(tag) for tag in raw_tags if tag)
 
-        slug = _coalesce(data.get("mod_slug"), data.get("slug"))
-        homepage = _coalesce(data.get("mod_page_url"), data.get("nexusmods_url"), data.get("url"))
+        slug = coalesce(data.get("mod_slug"), data.get("slug"))
+        homepage = coalesce(data.get("mod_page_url"), data.get("nexusmods_url"), data.get("url"))
         if homepage and not str(homepage).startswith(("http://", "https://")):
             homepage = None
 
@@ -244,7 +257,7 @@ class NexusmodsClient(ProviderClient):
         author = Author(provider=Provider.NEXUSMODS, id=str(author_id), name=str(author_name), raw=dict(user))
         latest_version = self._build_latest_version(mod_key, data, files_data)
 
-        description = _coalesce(data.get("description"), data.get("description_markdown"), data.get("summary"))
+        description = coalesce(data.get("description"), data.get("description_markdown"), data.get("summary"))
         if description is not None:
             description = str(description)
 
@@ -252,7 +265,7 @@ class NexusmodsClient(ProviderClient):
             provider=Provider.NEXUSMODS,
             id=mod_key,
             slug=str(slug) if slug is not None else None,
-            name=LocalisedText(value=str(_coalesce(data.get("name"), data.get("mod_name"), mod_id.id))),
+            name=LocalisedText(value=str(coalesce(data.get("name"), data.get("mod_name"), mod_id.id))),
             description_md=LocalisedText(value=description) if description is not None else None,
             author=author,
             homepage=cast(AnyHttpUrl | None, homepage),

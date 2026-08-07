@@ -30,6 +30,15 @@ class DependencyRelation(StrEnum):
     INCLUDED = "included"
 
 
+class DownloadAccess(StrEnum):
+    """Ways a caller can access a release file."""
+
+    DIRECT = "direct"
+    RESOLVABLE = "resolvable"
+    WEB = "web"
+    UNAVAILABLE = "unavailable"
+
+
 LocaleTag = Annotated[
     str,
     StringConstraints(
@@ -60,9 +69,6 @@ class LocalisedText(BaseModel):
 
     def __str__(self) -> str:
         return self.value
-
-    def __hash__(self) -> int:
-        return hash((self.value, tuple(sorted(self.translations.items()))))
 
 
 class ProviderCreds(BaseModel):
@@ -147,9 +153,6 @@ class ModSummary(BaseModel):
     author: Author
     summary: LocalisedText | None = None
 
-    def __hash__(self) -> int:
-        return hash((self.provider, self.id, self.slug, self.name, self.author, self.summary))
-
 
 class Dependency(BaseModel):
     """A mod dependency constraint."""
@@ -159,12 +162,73 @@ class Dependency(BaseModel):
     version_req: str | None = None
     relation: DependencyRelation = DependencyRelation.REQUIRED
 
+
+class DownloadInfo(BaseModel):
+    """Provider-supplied access details for a release file.
+
+    Direct URLs can be short-lived and may still require caller credentials.
+    Resolvable files need a provider-specific request before a URL can be used.
+    Web URLs are intended to be opened in a browser or other provider-aware client.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    access: DownloadAccess
+    url: AnyHttpUrl | None = None
+    expires_at: datetime | None = None
+    requires_authentication: bool = False
+
+    @classmethod
+    def direct(
+        cls,
+        url: str,
+        *,
+        expires_at: datetime | None = None,
+        requires_authentication: bool = False,
+    ) -> "DownloadInfo":
+        """Build direct download access from a provider-supplied URL."""
+        return cls.model_validate(
+            {
+                "access": DownloadAccess.DIRECT,
+                "url": url,
+                "expires_at": expires_at,
+                "requires_authentication": requires_authentication,
+            }
+        )
+
+    @classmethod
+    def web(cls, url: str, *, requires_authentication: bool = False) -> "DownloadInfo":
+        """Build browser-oriented download access from a provider-supplied URL."""
+        return cls.model_validate(
+            {
+                "access": DownloadAccess.WEB,
+                "url": url,
+                "requires_authentication": requires_authentication,
+            }
+        )
+
+    @model_validator(mode="after")
+    def _validate_access_details(self) -> "DownloadInfo":
+        if self.access in {DownloadAccess.DIRECT, DownloadAccess.WEB} and self.url is None:
+            raise ValueError(f"{self.access} download access requires a URL")
+        if self.access in {DownloadAccess.RESOLVABLE, DownloadAccess.UNAVAILABLE} and self.url is not None:
+            raise ValueError(f"{self.access} download access cannot include a URL")
+        if self.expires_at is not None and self.access is not DownloadAccess.DIRECT:
+            raise ValueError("Only direct download URLs can have an expiry time")
+        return self
+
+
+def _unavailable_download_info() -> DownloadInfo:
+    return DownloadInfo(access=DownloadAccess.UNAVAILABLE)
+
+
 class FileAsset(BaseModel):
     """File metadata for mod releases."""
 
     file_id: str
     filename: str
     size_bytes: int | None = None
+    download: DownloadInfo = Field(default_factory=_unavailable_download_info)
 
 
 class ModVersion(BaseModel):

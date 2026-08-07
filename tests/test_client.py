@@ -12,7 +12,7 @@ from pydantic import SecretStr
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from modmux import Muxer
-from modmux.models import Author, LocaleTag, LocalisedText, Mod, ModID, Provider, ProviderCreds
+from modmux.models import Author, DownloadInfo, LocaleTag, LocalisedText, Mod, ModID, Provider, ProviderCreds
 from modmux.providers._base import ProviderClient
 from modmux.providers.modrinth import ModrinthClient, ModrinthCreds
 from modmux.providers.steam import SteamCreds
@@ -33,6 +33,7 @@ class StubProvider(ProviderClient):
         self.last_mod_ids: list[ModID] = []
         self.last_author_resolution: ToggleMode = ToggleMode.AUTO
         self.last_user_id: str | None = None
+        self.last_file_id: str | None = None
 
     async def get_mod(
         self,
@@ -74,6 +75,11 @@ class StubProvider(ProviderClient):
     async def get_user(self, user_id: str) -> Author:
         self.last_user_id = user_id
         return Author(provider=Provider.MODRINTH, id=user_id, name=f"user-{user_id}")
+
+    async def resolve_download(self, mod_id: ModID, file_id: str) -> DownloadInfo:
+        self.last_mod_id = mod_id
+        self.last_file_id = file_id
+        return DownloadInfo.direct("https://example.com/download.zip")
 
 
 class TestMuxer(unittest.IsolatedAsyncioTestCase):
@@ -139,6 +145,26 @@ class TestMuxer(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(stub.last_user_id, "abc123")
             self.assertEqual(author.id, "abc123")
             self.assertEqual(author.name, "user-abc123")
+
+    async def test_resolve_download_delegates_to_provider(self) -> None:
+        async with httpx.AsyncClient(transport=_ok_transport()) as http:
+            muxer = Muxer(http=http)
+            stub = StubProvider(None, http=http)
+            muxer.providers[Provider.MODRINTH] = stub
+            mod_id = ModID(provider=Provider.MODRINTH, id="abc")
+
+            download = await muxer.resolve_download(Provider.MODRINTH, mod_id, "release-1")
+
+        self.assertEqual(stub.last_mod_id, mod_id)
+        self.assertEqual(stub.last_file_id, "release-1")
+        self.assertEqual(str(download.url), "https://example.com/download.zip")
+
+    async def test_resolve_download_rejects_provider_mismatch(self) -> None:
+        async with httpx.AsyncClient(transport=_ok_transport()) as http:
+            muxer = Muxer(http=http)
+            mod_id = ModID(provider=Provider.STEAM, id="1")
+            with self.assertRaises(ValueError):
+                await muxer.resolve_download(Provider.MODRINTH, mod_id, "release-1")
 
     async def test_get_mod_from_url_unknown(self) -> None:
         async with httpx.AsyncClient(transport=_ok_transport()) as http:

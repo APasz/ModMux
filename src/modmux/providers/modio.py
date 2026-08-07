@@ -2,7 +2,6 @@
 
 import asyncio
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime
 from typing import cast
 from urllib.parse import urlsplit
 
@@ -15,6 +14,8 @@ from ..models import (
     Author,
     Dependency,
     DependencyRelation,
+    DownloadAccess,
+    DownloadInfo,
     FileAsset,
     LocaleTag,
     LocalisedText,
@@ -28,6 +29,7 @@ from ..modmux_errors import ModMuxError, NotFound, ProviderError
 from ..toggles import ToggleMode, UndefinedType
 from ..utils.discovery import register
 from ._base import ProviderClient
+from ._helpers import coalesce, extract_tags, parse_timestamp
 from .colour import Colour
 
 log = get_logger(__name__)
@@ -45,45 +47,6 @@ class ModioCreds(ProviderCreds):
 
     def format_base(self, base: str) -> str:
         return f"https://u-{self.user_id.get_secret_value()}.modapi.io/v1"
-
-
-def _coalesce(*values: object) -> object | None:
-    for value in values:
-        if value is None:
-            continue
-        if isinstance(value, str) and not value.strip():
-            continue
-        return value
-    return None
-
-
-def _parse_timestamp(value: object | None) -> datetime | None:
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        return datetime.fromtimestamp(value, tz=UTC)
-    if isinstance(value, str):
-        cleaned = value.replace("Z", "+00:00") if value.endswith("Z") else value
-        try:
-            return datetime.fromisoformat(cleaned)
-        except ValueError:
-            return None
-    return None
-
-
-def _extract_tags(raw: object) -> list[str]:
-    tags: list[str] = []
-    if isinstance(raw, list):
-        for entry in raw:
-            if isinstance(entry, str):
-                if entry.strip():
-                    tags.append(entry)
-                continue
-            if isinstance(entry, dict):
-                name = _coalesce(entry.get("name"), entry.get("tag"))
-                if name is not None:
-                    tags.append(str(name))
-    return tags
 
 
 def _is_numeric(value: str) -> bool:
@@ -137,6 +100,21 @@ def _localised_text(value: str | None, translations: dict[LocaleTag, str]) -> Lo
     return LocalisedText(value=value, translations=translations)
 
 
+def _build_download_info(modfile: Mapping[str, object]) -> DownloadInfo:
+    raw_download = modfile.get("download")
+    if not isinstance(raw_download, Mapping):
+        return DownloadInfo(access=DownloadAccess.RESOLVABLE, requires_authentication=True)
+
+    raw_url = raw_download.get("binary_url")
+    if not isinstance(raw_url, str) or not raw_url.startswith(("http://", "https://")):
+        return DownloadInfo(access=DownloadAccess.RESOLVABLE, requires_authentication=True)
+
+    return DownloadInfo.direct(
+        raw_url,
+        expires_at=parse_timestamp(raw_download.get("date_expires")),
+    )
+
+
 _MODIO_BATCH_SIZE = 100
 
 
@@ -187,7 +165,7 @@ class ModioClient(ProviderClient):
             raise NotFound(f"{self.name}: game {game!r} not found")
 
         resolved_id = str(game_item["id"])
-        game_slug = _coalesce(game_item.get("name_id"), game_item.get("slug"))
+        game_slug = coalesce(game_item.get("name_id"), game_item.get("slug"))
         if self.cache and game_slug is not None:
             await self.cache.game_slug_to_id.set(str(game_slug), resolved_id)
             await self.cache.game_id_to_slug.set(resolved_id, str(game_slug))
@@ -208,12 +186,34 @@ class ModioClient(ProviderClient):
             raise NotFound(f"{self.name}: mod {mod_value!r} not found")
 
         resolved_id = str(mod_item["id"])
-        mod_slug = _coalesce(mod_item.get("name_id"), mod_item.get("slug"))
+        mod_slug = coalesce(mod_item.get("name_id"), mod_item.get("slug"))
         if self.cache and mod_slug is not None:
             key = _mod_cache_key(game_id, str(mod_slug))
             await self.cache.mod_slug_to_id.set(key, resolved_id)
             await self.cache.mod_id_to_slug.set(_mod_cache_key(game_id, resolved_id), str(mod_slug))
         return resolved_id
+
+    async def resolve_download(self, mod_id: ModID, file_id: str) -> DownloadInfo:
+        """Mint the current mod.io binary URL for a release file."""
+        self._require_access()
+        if not mod_id.game:
+            raise ValueError("mod.io requires ModID.game (game id).")
+
+        file_value = str(file_id).strip()
+        if not _is_numeric(file_value):
+            raise ValueError("mod.io file ids must be numeric.")
+
+        game_id = await self._resolve_game_id(str(mod_id.game))
+        mod_value = await self._resolve_mod_id(game_id, str(mod_id.id))
+        payload = await self._get_json(f"games/{game_id}/mods/{mod_value}/files/{file_value}")
+        modfile = _extract_first_item(payload)
+        if modfile is None:
+            raise ProviderError(f"{self.name}: unexpected file response shape")
+
+        download = _build_download_info(modfile)
+        if download.access is not DownloadAccess.DIRECT:
+            raise ProviderError(f"{self.name}: file {file_id!r} did not provide a direct download URL")
+        return download
 
     async def _fetch_mods_batch(
         self,
@@ -240,7 +240,7 @@ class ModioClient(ProviderClient):
             if isinstance(data, dict) and (data.get("error") or data.get("error_ref")):
                 raise ProviderError(f"{self.name}: {data.get('error') or data.get('error_ref')}")
             for payload in _extract_items(data):
-                mod_value = _coalesce(payload.get("id"))
+                mod_value = coalesce(payload.get("id"))
                 if mod_value is None:
                     continue
                 mods_by_id[str(mod_value)] = payload
@@ -250,8 +250,8 @@ class ModioClient(ProviderClient):
     async def _update_cache_from_payload(self, game_id: str, payload: Mapping[str, object]) -> None:
         if not self.cache:
             return
-        payload_slug = _coalesce(payload.get("name_id"), payload.get("slug"))
-        payload_id = _coalesce(payload.get("id"))
+        payload_slug = coalesce(payload.get("name_id"), payload.get("slug"))
+        payload_id = coalesce(payload.get("id"))
         if payload_slug is None or payload_id is None:
             return
         slug = str(payload_slug)
@@ -296,15 +296,16 @@ class ModioClient(ProviderClient):
                     file_id=str(modfile_id),
                     filename=filename,
                     size_bytes=filesize if isinstance(filesize, int) else None,
+                    download=_build_download_info(modfile),
                 )
             )
 
         return ModVersion(
             id=mod_key,
-            name=str(_coalesce(modfile.get("filename"), modfile.get("version"), modfile_id)),
-            version=str(_coalesce(modfile.get("version"), modfile_id)),
+            name=str(coalesce(modfile.get("filename"), modfile.get("version"), modfile_id)),
+            version=str(coalesce(modfile.get("version"), modfile_id)),
             changelog_md=str(modfile.get("changelog")) if modfile.get("changelog") is not None else None,
-            published_at=_parse_timestamp(_coalesce(modfile.get("date_added"), modfile.get("date_updated"))),
+            published_at=parse_timestamp(coalesce(modfile.get("date_added"), modfile.get("date_updated"))),
             files=files,
             dependencies=list(dependencies),
             raw=dict(modfile),
@@ -321,13 +322,13 @@ class ModioClient(ProviderClient):
         description_translations: dict[LocaleTag, str],
         dependencies: Sequence[Dependency],
     ) -> Mod:
-        name = _coalesce(payload.get("name"), payload.get("mod_name"), requested.id)
-        slug = _coalesce(payload.get("name_id"), payload.get("slug"))
-        description = _coalesce(payload.get("description"), payload.get("summary"))
+        name = coalesce(payload.get("name"), payload.get("mod_name"), requested.id)
+        slug = coalesce(payload.get("name_id"), payload.get("slug"))
+        description = coalesce(payload.get("description"), payload.get("summary"))
         if description is not None:
             description = str(description)
 
-        homepage = _coalesce(payload.get("profile_url"), payload.get("homepage_url"), payload.get("url"))
+        homepage = coalesce(payload.get("profile_url"), payload.get("homepage_url"), payload.get("url"))
         if homepage and not str(homepage).startswith(("http://", "https://")):
             homepage = None
 
@@ -335,13 +336,13 @@ class ModioClient(ProviderClient):
         if not isinstance(submitted_by, dict):
             submitted_by = {}
 
-        author_id = _coalesce(
+        author_id = coalesce(
             submitted_by.get("id"),
             submitted_by.get("user_id"),
             submitted_by.get("member_id"),
             "unknown",
         )
-        author_name = _coalesce(
+        author_name = coalesce(
             submitted_by.get("username"),
             submitted_by.get("name"),
             submitted_by.get("name_id"),
@@ -349,20 +350,20 @@ class ModioClient(ProviderClient):
             "unknown",
         )
 
-        created_at = _parse_timestamp(_coalesce(payload.get("date_added"), payload.get("created_at")))
-        updated_at = _parse_timestamp(_coalesce(payload.get("date_updated"), payload.get("updated_at")))
+        created_at = parse_timestamp(coalesce(payload.get("date_added"), payload.get("created_at")))
+        updated_at = parse_timestamp(coalesce(payload.get("date_updated"), payload.get("updated_at")))
 
-        tags = _extract_tags(payload.get("tags"))
+        tags = extract_tags(payload.get("tags"))
 
         modfile = payload.get("modfile")
         latest_version_id = None
         if isinstance(modfile, dict) and modfile.get("id") is not None:
             latest_version_id = str(modfile.get("id"))
 
-        resolved_game_id = _coalesce(payload.get("game_id"), game_id)
+        resolved_game_id = coalesce(payload.get("game_id"), game_id)
         mod_key = ModID(
             provider=Provider.MODIO,
-            id=str(_coalesce(payload.get("id"), mod_value)),
+            id=str(coalesce(payload.get("id"), mod_value)),
             game=str(resolved_game_id),
         )
         author = Author(provider=Provider.MODIO, id=str(author_id), name=str(author_name), raw=dict(submitted_by))
@@ -472,10 +473,10 @@ class ModioClient(ProviderClient):
                         log.debug("mod.io localization fetch failed for %s: %s", locale, exc)
                         continue
                     for mod_value, translated_payload in translated_payloads.items():
-                        translated_name = _coalesce(translated_payload.get("name"), translated_payload.get("mod_name"))
+                        translated_name = coalesce(translated_payload.get("name"), translated_payload.get("mod_name"))
                         if translated_name is not None:
                             name_translations.setdefault((game_id, mod_value), {})[locale] = str(translated_name)
-                        translated_description = _coalesce(
+                        translated_description = coalesce(
                             translated_payload.get("description"),
                             translated_payload.get("summary"),
                         )

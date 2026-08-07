@@ -13,6 +13,8 @@ from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, ValidationError
 
 from ..models import (
     Author,
+    DownloadAccess,
+    DownloadInfo,
     FileAsset,
     LocaleTag,
     LocalisedText,
@@ -26,6 +28,7 @@ from ..modmux_errors import NotFound, ProviderError
 from ..toggles import ToggleMode, UndefinedType
 from ..utils.discovery import register
 from ._base import ProviderClient
+from ._helpers import coalesce
 from .colour import Colour
 
 _DEFAULT_DOWNLOAD_PREFIX_URL = "https://www.transportfever.net/filebase/entry-download/"
@@ -143,16 +146,6 @@ class TransportfeverHtmlEntry(BaseModel):
     version: str | None = None
     files: list[TransportfeverHtmlFile] = Field(default_factory=list)
     raw: dict[str, Any] = Field(default_factory=dict)
-
-
-def _coalesce(*values: object) -> object | None:
-    for value in values:
-        if value is None:
-            continue
-        if isinstance(value, str) and not value.strip():
-            continue
-        return value
-    return None
 
 
 def _parse_datetime(value: object | None) -> datetime | None:
@@ -304,6 +297,12 @@ def _raw_file_entry(
     raw["download_url"] = _join_url(download_prefix_url, entry.download)
     raw["entry_url"] = _join_url(entry_prefix_url, entry.entryurl)
     return raw
+
+
+def _web_download_info(url: str | None) -> DownloadInfo:
+    if url is None or not url.startswith(("http://", "https://")):
+        return DownloadInfo(access=DownloadAccess.UNAVAILABLE)
+    return DownloadInfo.web(url)
 
 
 class _TransportfeverEntryHtmlParser(HTMLParser):
@@ -702,12 +701,14 @@ class TransportfevernetClient(ProviderClient):
 
         files: list[FileAsset] = []
         for entry in version_entries:
-            file_id = str(_coalesce(_file_id_from_download(entry.download), entry.version, entry.modid))
+            file_id = str(coalesce(_file_id_from_download(entry.download), entry.version, entry.modid))
+            download = _web_download_info(_join_url(repo.download_prefix_url, entry.download))
             files.append(
                 FileAsset(
                     file_id=file_id,
                     filename=_filename_for(entry, file_id),
                     size_bytes=entry.download_size,
+                    download=download,
                 )
             )
 
@@ -743,9 +744,9 @@ class TransportfevernetClient(ProviderClient):
         game: TransportfeverGame | None,
     ) -> Mod:
         entry_id = _entry_id_from_entryurl(selected.entryurl)
-        resolved_id = str(_coalesce(entry_id, selected.modid))
+        resolved_id = str(coalesce(entry_id, selected.modid))
         mod_key = ModID(provider=Provider.TRANSPORTFEVERNET, id=resolved_id, game=game.value if game else None)
-        author_name = str(_coalesce(selected.author, "unknown"))
+        author_name = str(coalesce(selected.author, "unknown"))
         homepage = _join_url(repo.entry_prefix_url, selected.entryurl)
         latest_version = self._build_latest_version(mod_key, selected, related, repo)
 
@@ -792,7 +793,13 @@ class TransportfevernetClient(ProviderClient):
     def _build_html_mod(self, entry: TransportfeverHtmlEntry, *, game: TransportfeverGame | None) -> Mod:
         mod_key = ModID(provider=Provider.TRANSPORTFEVERNET, id=entry.entry_id, game=game.value if game else None)
         latest_files = [
-            FileAsset(file_id=file.file_id, filename=file.filename) for file in entry.files if file.filename.strip()
+            FileAsset(
+                file_id=file.file_id,
+                filename=file.filename,
+                download=_web_download_info(file.download_url),
+            )
+            for file in entry.files
+            if file.filename.strip()
         ]
         latest_version = None
         if entry.version is not None or latest_files:

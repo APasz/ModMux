@@ -8,7 +8,7 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from modmux.models import ModID, Provider
+from modmux.models import DownloadAccess, ModID, Provider
 from modmux.providers.nexusmods import NexusmodsClient
 
 
@@ -79,6 +79,8 @@ class TestNexusmodsClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([file.file_id for file in mod.latest_version.files], ["500"])
         self.assertEqual(mod.latest_version.files[0].filename, "skyui_5_2.zip")
         self.assertEqual(mod.latest_version.files[0].size_bytes, 4096)
+        self.assertEqual(mod.latest_version.files[0].download.access, DownloadAccess.RESOLVABLE)
+        self.assertTrue(mod.latest_version.files[0].download.requires_authentication)
         self.assertIsNotNone(mod.created_at)
         self.assertIsNotNone(mod.updated_at)
 
@@ -87,6 +89,22 @@ class TestNexusmodsClient(unittest.IsolatedAsyncioTestCase):
             client = NexusmodsClient(None, http=http)
             with self.assertRaises(ValueError):
                 await client.get_mod(ModID(provider=Provider.NEXUSMODS, id="123"))
+
+    async def test_resolve_download_mints_direct_url(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            self.assertEqual(request.url.path, "/v1/games/skyrim/mods/123/files/500/download_link.json")
+            return httpx.Response(
+                200,
+                json=[{"URI": "https://cdn.nexusmods.com/files/123/skyui.zip"}],
+                request=request,
+            )
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            client = NexusmodsClient(None, http=http)
+            download = await client.resolve_download(ModID(provider=Provider.NEXUSMODS, id="123", game="skyrim"), "500")
+
+        self.assertEqual(download.access, DownloadAccess.DIRECT)
+        self.assertEqual(str(download.url), "https://cdn.nexusmods.com/files/123/skyui.zip")
 
     async def test_get_mod_leaves_files_empty_when_versions_do_not_match(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:

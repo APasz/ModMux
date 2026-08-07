@@ -9,7 +9,7 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from modmux.models import ModID, Provider
+from modmux.models import DownloadAccess, ModID, Provider
 from modmux.modmux_errors import NotFound, ProviderError
 from modmux.providers.steam import SteamClient
 from modmux.toggles import ToggleMode
@@ -153,6 +153,7 @@ class TestSteamClient(unittest.IsolatedAsyncioTestCase):
                                 "filename": "city-pack.zip",
                                 "file_size": 4096,
                                 "hcontent_file": "ugc-123",
+                                "file_url": "https://steamusercontent-a.akamaihd.net/ugc/city-pack.zip",
                                 "revision_change_number": 77,
                                 "time_updated": "2023-01-02T00:00:00Z",
                                 "creator": "author1",
@@ -177,6 +178,7 @@ class TestSteamClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([file.file_id for file in mod.latest_version.files], ["ugc-123"])
         self.assertEqual(mod.latest_version.files[0].filename, "city-pack.zip")
         self.assertEqual(mod.latest_version.files[0].size_bytes, 4096)
+        self.assertEqual(mod.latest_version.files[0].download.access, DownloadAccess.DIRECT)
 
     async def test_get_mod_skips_author_lookup_by_default(self) -> None:
         calls: dict[str, int] = {"details": 0, "user": 0}
@@ -263,7 +265,7 @@ class TestSteamClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mod.author.raw.get("steamid"), "76561198000000001")
         self.assertEqual(mod.author.raw.get("personaname"), "DisplayName")
 
-    async def test_get_user_validates_and_falls_back_to_first_player(self) -> None:
+    async def test_get_user_validates_and_rejects_an_unmatched_player(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(
                 200,
@@ -280,10 +282,8 @@ class TestSteamClient(unittest.IsolatedAsyncioTestCase):
             client = SteamClient(None, http=http)
             with self.assertRaises(ValueError):
                 await client.get_user(" ")
-            author = await client.get_user("missing")
-
-        self.assertEqual(author.id, "first")
-        self.assertEqual(author.name, "FallbackName")
+            with self.assertRaises(NotFound):
+                await client.get_user("missing")
 
     async def test_get_mods_falls_back_when_localization_or_user_lookup_fails(self) -> None:
         calls: dict[str, int] = {"details": 0, "users": 0}

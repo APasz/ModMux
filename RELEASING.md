@@ -22,7 +22,9 @@ The GitHub Actions workflow publishes to PyPI when a tag starting with `v` is pu
 
 ### Optional: one-click release (GitHub Actions)
 - Use the `Release` workflow.
-- The workflow reads the version from `pyproject.toml`, checks the changelog, creates the tag, and publishes.
+- The workflow reads the version from `pyproject.toml`, checks the changelog,
+  runs the test/build preflight, and creates the tag. The tag-triggered CI
+  workflow publishes to PyPI.
 
 ## After publishing
 - Verify install:

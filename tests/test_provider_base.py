@@ -9,7 +9,18 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from modmux.models import Provider, ProviderCreds
+from modmux.models import (
+    Author,
+    DownloadAccess,
+    DownloadInfo,
+    FileAsset,
+    LocalisedText,
+    Mod,
+    ModID,
+    ModVersion,
+    Provider,
+    ProviderCreds,
+)
 from modmux.modmux_errors import AuthError, NotFound, ProviderError, RateLimited
 from modmux.providers._base import ProviderClient
 
@@ -30,6 +41,34 @@ class DummyClient(ProviderClient):
     base = "https://example.com/api"
     domains = ("example.com",)
 
+    async def get_mod(self, mod_id: ModID, **_: object) -> Mod:
+        raise NotImplementedError
+
+
+class IncompleteClient(ProviderClient):
+    name: Provider = Provider.MODRINTH
+    base = "https://example.com/api"
+
+
+class DownloadDummyClient(DummyClient):
+    def __init__(self, download: DownloadInfo, *, http: httpx.AsyncClient) -> None:
+        super().__init__(None, http=http)
+        self.download = download
+
+    async def get_mod(self, mod_id: ModID, **_: object) -> Mod:
+        author = Author(provider=Provider.MODRINTH, id="author", name="Author")
+        latest_version = ModVersion(
+            id=mod_id,
+            files=[FileAsset(file_id="release", filename="release.zip", download=self.download)],
+        )
+        return Mod(
+            provider=Provider.MODRINTH,
+            id=mod_id,
+            name=LocalisedText(value="Example"),
+            author=author,
+            latest_version=latest_version,
+        )
+
 
 class TestProviderHelpers(unittest.IsolatedAsyncioTestCase):
     async def test_normalise_and_match(self) -> None:
@@ -37,6 +76,11 @@ class TestProviderHelpers(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(DummyClient._match_domain("www.example.com"))
         self.assertTrue(DummyClient._match_domain("api.example.com"))
         self.assertFalse(DummyClient._match_domain("example.org"))
+
+    async def test_get_mod_is_required(self) -> None:
+        async with httpx.AsyncClient(transport=_ok_transport()) as http:
+            with self.assertRaises(TypeError):
+                IncompleteClient(None, http=http)  # pyright: ignore[reportAbstractUsage]
 
     async def test_abs_url_with_creds(self) -> None:
         async with httpx.AsyncClient(transport=_ok_transport()) as http:
@@ -132,6 +176,23 @@ class TestProviderHelpers(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.json(), {"ok": True})
         sleep_mock.assert_awaited_once()
 
+    async def test_get_and_post_map_connect_timeouts(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectTimeout("timed out", request=request)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            client = DummyClient(None, http=http)
+            with self.assertRaises(ProviderError):
+                await client._get("/mods/1", max_attempts=1)
+            with self.assertRaises(ProviderError):
+                await client._post("/mods/1", max_attempts=1)
+
+    async def test_request_attempt_count_must_be_positive(self) -> None:
+        async with httpx.AsyncClient(transport=_ok_transport()) as http:
+            client = DummyClient(None, http=http)
+            with self.assertRaises(ValueError):
+                await client._get("/mods/1", max_attempts=0)
+
     async def test_post_retries_after_server_error(self) -> None:
         calls = 0
 
@@ -159,3 +220,20 @@ class TestProviderHelpers(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(author.id, "user-1")
             self.assertEqual(author.name, "user-1")
             self.assertEqual(author.raw, {})
+
+    async def test_resolve_download_returns_existing_direct_access(self) -> None:
+        async with httpx.AsyncClient(transport=_ok_transport()) as http:
+            client = DownloadDummyClient(DownloadInfo.direct("https://example.com/release.zip"), http=http)
+            download = await client.resolve_download(ModID(provider=Provider.MODRINTH, id="example"), "release")
+
+        self.assertEqual(download.access, DownloadAccess.DIRECT)
+        self.assertEqual(str(download.url), "https://example.com/release.zip")
+
+    async def test_resolve_download_rejects_unimplemented_resolution(self) -> None:
+        async with httpx.AsyncClient(transport=_ok_transport()) as http:
+            client = DownloadDummyClient(
+                DownloadInfo(access=DownloadAccess.RESOLVABLE),
+                http=http,
+            )
+            with self.assertRaises(ProviderError):
+                await client.resolve_download(ModID(provider=Provider.MODRINTH, id="example"), "release")
